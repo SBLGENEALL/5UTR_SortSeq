@@ -2,6 +2,15 @@
 
 `whole unsorted + mCherry high→low 6 bins`로 구성된 7-sample 5′UTR Sort-seq 분석 파이프라인입니다.
 
+> **권장 실행 방식:** 전체를 한 번에 실행하기보다
+> [5단계 분석 흐름과 단계별 명령](docs/PIPELINE_WORKFLOW_KO.md)에 따라
+> `preflight → rescue → libraryqc → analyze → plot`을 하나씩 실행하고 각 결과를
+> 확인하세요. 이 문서는 각 단계의 목적, 완료 판정, 중단 후 재개 방법도 설명합니다.
+
+> **서버 환경:** 분석 서버는 오프라인 Linux입니다. GitHub ZIP은 인터넷 가능한
+> PC에서 받아 서버로 옮기고, 서버에서는 기존 pDNA QC Python/R 환경과
+> `NGS_LibraryQC`를 재사용합니다.
+
 이 저장소는 기존 [`NGS_LibraryQC`](https://github.com/SBLGENEALL/NGS_LibraryQC)를 대체하지 않습니다. 역할을 다음처럼 분리합니다.
 
 | 단계 | 담당 |
@@ -23,18 +32,16 @@
 | bin6 | mCherry-positive gate 내 가장 낮음 | 0.20 | 1 |
 | unsorted | gate 전 whole population | 해당 없음 | 주 score에 사용하지 않음 |
 
-## 서버에서 가장 짧은 실행법
+## 서버에서 시작하기
 
 ```bash
 cd /data/user/MCET03/03_NGS/02_5UTR_sorting
 unzip /옮겨놓은/5UTR_SortSeq.zip
-cd 5UTR_SortSeq
-
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-Rscript scripts/install_r_packages.R
+cd 5UTR_SortSeq-main
 ```
+
+기존 pDNA QC에 사용한 Python/R 환경을 활성화합니다. 오프라인 서버에서 온라인
+`pip`, R package 설치, `curl`, `wget`, `git clone/pull`을 실행하지 않습니다.
 
 FASTQ 이름에서 7개 sample prefix를 읽고, 원래 NGS run SampleSheet의 실제
 `Sample_ID/index/index2`를 검증하여 설정 파일을 만듭니다.
@@ -57,13 +64,18 @@ SampleSheet의 같은 `Sample_ID`에서 실제 i7/i5를 가져옵니다. 생성�
 cp config/project.env.example \
   /data/user/MCET03/03_NGS/02_5UTR_sorting/config/sortseq.env
 
-# sortseq.env의 NGS_LibraryQC script/config 경로를 확인한 뒤 실행
+# sortseq.env의 NGS_LibraryQC script/config 경로를 확인한 뒤 단계별 실행
 export SORTSEQ_PROJECT_CONFIG=/data/user/MCET03/03_NGS/02_5UTR_sorting/config/sortseq.env
 bash run_pipeline.sh preflight
-bash run_pipeline.sh full
+bash run_pipeline.sh rescue
+bash run_pipeline.sh libraryqc
+bash run_pipeline.sh analyze
+bash run_pipeline.sh plot
 ```
 
-`preflight`에서 index가 header에 있는지, i5 방향, sample 이름, index 간 최소 거리를 먼저 확인합니다. 기존 결과를 보존하며 다시 실행하려면 `bash run_pipeline.sh full --replace`를 사용합니다. 이전 결과는 `archive/`로 이동합니다.
+각 명령이 끝날 때마다 결과를 확인한 후 다음 단계로 넘어갑니다. 자세한 완료 판정은
+[5단계 분석 흐름](docs/PIPELINE_WORKFLOW_KO.md)을 따르세요. 처음부터 완전히
+재분석해야 할 때만 `bash run_pipeline.sh full --replace`를 사용합니다.
 
 ## 먼저 볼 결과
 
@@ -78,7 +90,10 @@ results/sortseq/high_candidates.tsv
 results/sortseq/figures/sortseq_qc_figures.pdf
 ```
 
-상세 실행법은 [docs/SERVER_GUIDE_KO.md](docs/SERVER_GUIDE_KO.md), 결과 해석은 [docs/RESULTS_GUIDE_KO.md](docs/RESULTS_GUIDE_KO.md), Undetermined 처리 원칙은 [docs/UNDETERMINED_RESCUE_KO.md](docs/UNDETERMINED_RESCUE_KO.md)를 보세요.
+전체 흐름은 [docs/PIPELINE_WORKFLOW_KO.md](docs/PIPELINE_WORKFLOW_KO.md),
+서버 설정은 [docs/SERVER_GUIDE_KO.md](docs/SERVER_GUIDE_KO.md), 결과 해석은
+[docs/RESULTS_GUIDE_KO.md](docs/RESULTS_GUIDE_KO.md), Undetermined 처리 원칙은
+[docs/UNDETERMINED_RESCUE_KO.md](docs/UNDETERMINED_RESCUE_KO.md)를 보세요.
 
 ## 자체 테스트
 
