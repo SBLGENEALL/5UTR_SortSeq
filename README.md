@@ -21,6 +21,18 @@ bash run_pipeline.sh status
 Rescue 단계는 30초마다 진행률, 처리 read 수, 속도, rescue율, 경과시간과 ETA를
 출력하고 `results/index_rescue/rescue_progress.json`에도 기록합니다.
 
+서버의 128 physical core/256 logical CPU/4 NUMA node/503 GiB 구성을 파이프라인이
+어떻게 사용할지 먼저 확인할 수 있습니다.
+
+```bash
+bash run_pipeline.sh resources
+```
+
+기본 성능 설정은 `NGS_LibraryQC` 128 workers, batch size 10,000, NUMA memory
+interleave입니다. Undetermined rescue는 index lookup을 미리 계산하고 각 sample의
+R1/R2 gzip 출력을 별도 프로세스로 동시에 압축합니다. 서버에 `pigz`가 이미 있으면
+자동 사용하고, 없어도 내장 Python 병렬 압축을 사용하므로 온라인 설치는 필요 없습니다.
+
 이 저장소는 기존 [`NGS_LibraryQC`](https://github.com/SBLGENEALL/NGS_LibraryQC)를 대체하지 않습니다. 역할을 다음처럼 분리합니다.
 
 | 단계 | 담당 |
@@ -92,6 +104,7 @@ bash run_pipeline.sh plot
 ```text
 results/index_rescue/rescue_inspection.json
 results/index_rescue/rescue_summary.csv
+results/resource_profile.tsv
 results/library_qc/report.html
 results/library_qc/combined/variant_count_matrix.csv
 results/sortseq/utr_results_easy.tsv

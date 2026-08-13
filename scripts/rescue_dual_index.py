@@ -16,13 +16,15 @@ import gzip
 import io
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import zip_longest
+from itertools import combinations, product, zip_longest
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, TextIO
 
@@ -35,6 +37,7 @@ READ_TOKEN_RE = re.compile(
 )
 DNA_RE = re.compile(r"^[ACGTN]+$", re.IGNORECASE)
 COMPLEMENT = str.maketrans("ACGTNacgtn", "TGCANtgcan")
+DNA_SYMBOLS = "ACGTN"
 
 
 @dataclass(frozen=True)
@@ -280,6 +283,118 @@ def classify_index(
     return best_sample, f"rescued_distance_{best_total}", best_total, best_d7, best_d5
 
 
+def sequence_neighbors(sequence: str, max_mismatches: int) -> Iterator[tuple[str, int]]:
+    """Yield all DNA strings within a small Hamming radius of ``sequence``."""
+    sequence = sequence.upper()
+    yield sequence, 0
+    for distance in range(1, max_mismatches + 1):
+        for positions in combinations(range(len(sequence)), distance):
+            replacements = [
+                tuple(symbol for symbol in DNA_SYMBOLS if symbol != sequence[position])
+                for position in positions
+            ]
+            for symbols in product(*replacements):
+                value = list(sequence)
+                for position, symbol in zip(positions, symbols):
+                    value[position] = symbol
+                yield "".join(value), distance
+
+
+class FastIndexClassifier:
+    """O(1) classification for the configured rescue radius, with fallback caching.
+
+    A seven-sample experiment with an allowed dual-index distance of two has only
+    a few tens of thousands of relevant observed pairs. Precomputing those pairs
+    avoids repeating Python Hamming-distance loops for every FASTQ record.
+    """
+
+    def __init__(
+        self,
+        expected: list[ExpectedIndex],
+        max_total_mismatches: int,
+        max_per_index_mismatches: int,
+        minimum_margin: int,
+        cache_max_entries: int = 500_000,
+    ):
+        self.expected = expected
+        self.max_total_mismatches = max_total_mismatches
+        self.max_per_index_mismatches = max_per_index_mismatches
+        self.minimum_margin = minimum_margin
+        self.cache_max_entries = cache_max_entries
+        self.lookup: dict[
+            tuple[str, str], tuple[str | None, str, int | None, int | None, int | None]
+        ] = {}
+        self.fallback_cache: dict[
+            tuple[str, str], tuple[str | None, str, int | None, int | None, int | None]
+        ] = {}
+        self.counters: Counter[str] = Counter()
+        self._build_lookup()
+
+    def _build_lookup(self) -> None:
+        # Larger radii grow combinatorially. The normal, validated pipeline uses
+        # radius two; unusual settings keep exact semantics via the cached fallback.
+        if self.max_total_mismatches > 2:
+            return
+        candidates: set[tuple[str, str]] = set()
+        per_index_radius = min(self.max_total_mismatches, self.max_per_index_mismatches)
+        for record in self.expected:
+            i7_neighbors = list(sequence_neighbors(record.i7, per_index_radius))
+            i5_neighbors = list(sequence_neighbors(record.i5, per_index_radius))
+            for (i7, d7), (i5, d5) in product(i7_neighbors, i5_neighbors):
+                if d7 + d5 <= self.max_total_mismatches:
+                    candidates.add((i7, i5))
+        self.lookup = {
+            observed: classify_index(
+                observed,
+                self.expected,
+                self.max_total_mismatches,
+                self.max_per_index_mismatches,
+                self.minimum_margin,
+            )
+            for observed in candidates
+        }
+
+    def classify(
+        self, observed: tuple[str, str] | None
+    ) -> tuple[str | None, str, int | None, int | None, int | None]:
+        self.counters["calls"] += 1
+        if observed is None:
+            self.counters["missing_index"] += 1
+            return classify_index(
+                observed,
+                self.expected,
+                self.max_total_mismatches,
+                self.max_per_index_mismatches,
+                self.minimum_margin,
+            )
+        result = self.lookup.get(observed)
+        if result is not None:
+            self.counters["precomputed_lookup_hits"] += 1
+            return result
+        result = self.fallback_cache.get(observed)
+        if result is not None:
+            self.counters["fallback_cache_hits"] += 1
+            return result
+        self.counters["full_distance_calculations"] += 1
+        result = classify_index(
+            observed,
+            self.expected,
+            self.max_total_mismatches,
+            self.max_per_index_mismatches,
+            self.minimum_margin,
+        )
+        if len(self.fallback_cache) < self.cache_max_entries:
+            self.fallback_cache[observed] = result
+        return result
+
+    def stats(self) -> dict[str, int]:
+        return {
+            "precomputed_lookup_entries": len(self.lookup),
+            "fallback_cache_entries": len(self.fallback_cache),
+            **dict(self.counters),
+        }
+
+
 def choose_i5_orientation(
     parsed: list[FastqFile],
     records: list[ExpectedIndex],
@@ -343,14 +458,93 @@ def link_assigned_fastqs(parsed: list[FastqFile], output_fastq_dir: Path) -> int
     return linked
 
 
+class ProcessGzipWriter:
+    """Text writer backed by a dedicated gzip/pigz subprocess."""
+
+    def __init__(
+        self,
+        path: Path,
+        backend: str,
+        compresslevel: int,
+        pigz_threads: int,
+    ):
+        self.path = path
+        self.backend = backend
+        self.output_handle = None
+        if backend == "pigz":
+            pigz = shutil.which("pigz")
+            if pigz is None:
+                raise RuntimeError("compression backend 'pigz' requested but pigz is not installed")
+            self.output_handle = path.open("wb")
+            command = [
+                pigz,
+                "-c",
+                "-p",
+                str(pigz_threads),
+                f"-{compresslevel}",
+            ]
+            self.process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=self.output_handle,
+            )
+        else:
+            worker = Path(__file__).with_name("gzip_stream_worker.py")
+            command = [
+                sys.executable,
+                str(worker),
+                "--output",
+                str(path),
+                "--compresslevel",
+                str(compresslevel),
+            ]
+            self.process = subprocess.Popen(command, stdin=subprocess.PIPE)
+        if self.process.stdin is None:
+            raise RuntimeError(f"failed to open compressor stdin for {path}")
+        self.text = io.TextIOWrapper(
+            self.process.stdin,
+            encoding="ascii",
+            newline="",
+            write_through=False,
+        )
+
+    def close_input(self) -> None:
+        if not self.text.closed:
+            self.text.close()
+
+    def wait(self) -> None:
+        return_code = self.process.wait()
+        if self.output_handle is not None:
+            self.output_handle.close()
+        if return_code != 0:
+            raise RuntimeError(
+                f"{self.backend} compressor failed with exit code {return_code}: {self.path}"
+            )
+
+
 class LazyFastqWriters:
-    def __init__(self, output_dir: Path, chunk_number: int, paired: bool, compresslevel: int):
+    def __init__(
+        self,
+        output_dir: Path,
+        chunk_number: int,
+        paired: bool,
+        compresslevel: int,
+        compression_backend: str,
+        pigz_threads: int,
+    ):
         self.output_dir = output_dir
         self.chunk_number = chunk_number
         self.paired = paired
         self.compresslevel = compresslevel
+        if compression_backend == "auto":
+            compression_backend = "pigz" if shutil.which("pigz") else "parallel_python"
+        if compression_backend == "pigz" and shutil.which("pigz") is None:
+            raise RuntimeError("RESCUE_COMPRESSION_BACKEND=pigz but pigz was not found")
+        self.compression_backend = compression_backend
+        self.pigz_threads = pigz_threads
         self.stack = ExitStack()
         self.handles: dict[tuple[str, str], TextIO] = {}
+        self.process_writers: list[ProcessGzipWriter] = []
 
     def _handle(self, sample: str, read: str) -> TextIO:
         key = (sample, read)
@@ -358,8 +552,18 @@ class LazyFastqWriters:
             safe_sample = re.sub(r"[^A-Za-z0-9_.-]+", "_", sample).strip("_")
             filename = f"{safe_sample}_L900_{read}_{self.chunk_number:03d}.fastq.gz"
             path = self.output_dir / filename
-            handle = gzip.open(path, "wt", encoding="ascii", compresslevel=self.compresslevel)
-            self.handles[key] = self.stack.enter_context(handle)
+            if self.compression_backend == "gzip":
+                handle = gzip.open(path, "wt", encoding="ascii", compresslevel=self.compresslevel)
+                self.handles[key] = self.stack.enter_context(handle)
+            else:
+                process_writer = ProcessGzipWriter(
+                    path,
+                    self.compression_backend,
+                    self.compresslevel,
+                    self.pigz_threads,
+                )
+                self.process_writers.append(process_writer)
+                self.handles[key] = process_writer.text
         return self.handles[key]
 
     def write(self, sample: str, record1: FastqRecord, record2: FastqRecord | None) -> None:
@@ -368,6 +572,12 @@ class LazyFastqWriters:
             write_record(self._handle(sample, "R2"), record2)
 
     def close(self) -> None:
+        # Signal EOF to every compressor before waiting. This avoids serial waits
+        # and lets all sample/read outputs finish concurrently.
+        for writer in self.process_writers:
+            writer.close_input()
+        for writer in self.process_writers:
+            writer.wait()
         self.stack.close()
 
 
@@ -486,6 +696,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orientation-scan-reads", type=int, default=100_000)
     parser.add_argument("--compresslevel", type=int, choices=range(1, 10), default=1)
     parser.add_argument(
+        "--compression-backend",
+        choices=["auto", "pigz", "parallel_python", "gzip"],
+        default="auto",
+        help="Output compression: auto uses pigz when available, otherwise subprocess gzip",
+    )
+    parser.add_argument(
+        "--pigz-threads-per-file",
+        type=int,
+        default=4,
+        help="pigz threads per active output FASTQ (default: 4)",
+    )
+    parser.add_argument(
         "--progress-interval-seconds",
         type=float,
         default=30.0,
@@ -510,6 +732,8 @@ def main() -> int:
         raise ValueError("--progress-interval-seconds cannot be negative")
     if args.progress_check_reads < 1:
         raise ValueError("--progress-check-reads must be at least 1")
+    if args.pigz_threads_per_file < 1:
+        raise ValueError("--pigz-threads-per-file must be at least 1")
     parsed, warnings = discover_fastqs(args.input_dir)
     if not parsed:
         raise ValueError(f"no R1/R2 FASTQ files found under {args.input_dir}")
@@ -529,6 +753,15 @@ def main() -> int:
         orientation = args.i5_orientation
         orientation_qc = {"selected_by_user": 1}
     oriented = orient_expected(records, orientation)
+    classifier = FastIndexClassifier(
+        oriented,
+        args.max_total_mismatches,
+        args.max_per_index_mismatches,
+        args.minimum_margin,
+    )
+    selected_compression_backend = args.compression_backend
+    if selected_compression_backend == "auto":
+        selected_compression_backend = "pigz" if shutil.which("pigz") else "parallel_python"
 
     detected_assigned_samples = sorted(
         set(item.sample for item in parsed if not item.sample.lower().startswith("undetermined"))
@@ -555,6 +788,14 @@ def main() -> int:
         "selected_i5_orientation": orientation,
         "orientation_qc": orientation_qc,
         "minimum_expected_dual_index_distance": minimum_pair_distance,
+        "performance": {
+            "index_lookup_entries": len(classifier.lookup),
+            "requested_compression_backend": args.compression_backend,
+            "selected_compression_backend": selected_compression_backend,
+            "pigz_threads_per_output": (
+                args.pigz_threads_per_file if selected_compression_backend == "pigz" else 0
+            ),
+        },
         "warnings": warnings,
     }
     args.outdir.mkdir(parents=True, exist_ok=True)
@@ -585,6 +826,17 @@ def main() -> int:
         args.progress_interval_seconds,
     )
     progress.report(0, 0, 0, 1, len(undetermined_pairs), force=True)
+    print(
+        f"[rescue] fast index lookup: {len(classifier.lookup):,} entries; "
+        f"output compression: {selected_compression_backend}"
+        + (
+            f" ({args.pigz_threads_per_file} threads/output)"
+            if selected_compression_backend == "pigz"
+            else ""
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
     for chunk_number, (r1_file, r2_file) in enumerate(undetermined_pairs, start=1):
         r1_size = r1_file.path.stat().st_size
@@ -593,6 +845,8 @@ def main() -> int:
             chunk_number,
             r2_file is not None,
             args.compresslevel,
+            args.compression_backend,
+            args.pigz_threads_per_file,
         )
         current_r1_position = [0]
         iterator1 = iter_fastq(
@@ -631,13 +885,7 @@ def main() -> int:
                     status_counts["paired_header_index_disagreement"] += 1
                     writers.write("Undetermined_residual", record1, record2)
                     continue
-                sample, status, _, d7, d5 = classify_index(
-                    observed1,
-                    oriented,
-                    args.max_total_mismatches,
-                    args.max_per_index_mismatches,
-                    args.minimum_margin,
-                )
+                sample, status, _, d7, d5 = classifier.classify(observed1)
                 status_counts[status] += 1
                 if sample is None:
                     writers.write("Undetermined_residual", record1, record2)
@@ -707,11 +955,17 @@ def main() -> int:
         "rescued_percent": 100 * rescued_total / total if total else 0,
         "sample_rescued_counts": dict(sample_counts),
         "status_counts": dict(status_counts),
+        "performance": {
+            **inspection["performance"],
+            "index_classifier": classifier.stats(),
+        },
         "settings": {
             "max_total_mismatches": args.max_total_mismatches,
             "max_per_index_mismatches": args.max_per_index_mismatches,
             "minimum_margin": args.minimum_margin,
             "compresslevel": args.compresslevel,
+            "compression_backend": selected_compression_backend,
+            "pigz_threads_per_file": args.pigz_threads_per_file,
         },
     }
     (args.outdir / "rescue_manifest.json").write_text(

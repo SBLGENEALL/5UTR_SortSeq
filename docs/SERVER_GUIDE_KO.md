@@ -98,7 +98,18 @@ bash run_pipeline.sh preflight
 
 header에 `i7+i5`가 없으면 FASTQ만으로 read-level rescue할 수 없습니다. 이 경우 synchronized I1/I2 FASTQ 또는 original BCL에서 다시 demultiplex해야 합니다.
 
-## 7. 실행과 재실행
+## 7. 계산 리소스 확인
+
+```bash
+bash run_pipeline.sh resources
+```
+
+이 서버에서는 `physical_cores: 128`, `logical_cpus: 256`, `numa_nodes: 4`,
+`libraryqc_workers: 128`이 기대값입니다. `rescue_compression`은 `pigz`가 이미 설치된
+서버에서는 `pigz`, 그렇지 않으면 `parallel_python`으로 표시됩니다. 두 경우 모두
+오프라인에서 추가 package 설치 없이 실행할 수 있습니다.
+
+## 8. 실행과 재실행
 
 각 단계의 결과를 이해하고 확인하기 쉽도록 다음처럼 하나씩 실행하는 것을
 권장합니다. 자세한 목적과 완료 판정은
@@ -119,12 +130,12 @@ bash run_pipeline.sh plot
 bash run_pipeline.sh full --replace
 ```
 
-## 8. 실패 시 빠른 확인
+## 9. 실패 시 빠른 확인
 
 | 오류 | 먼저 볼 것 |
 |---|---|
 | SampleSheet sample mismatch | `detected_fastq_samples.csv`와 `Sample_ID`가 같은지 |
 | No i7+i5 strings | FASTQ header 두 번째 token 마지막 필드 |
 | matrix column not found | `sample_map.csv`의 `ngs_column`과 matrix header |
-| R package missing | `Rscript scripts/install_r_packages.R` |
+| R package missing | 인터넷 가능한 별도 환경에서 준비하거나 기존 pDNA R 환경 확인 |
 | coverage passing UTR 없음 | NGS_LibraryQC assigned reads와 cutoff 50/100 |

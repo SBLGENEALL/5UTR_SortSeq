@@ -15,11 +15,12 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh analyze
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh status
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh resources
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh full [--replace]
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|plot|status|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|plot|status|resources|full)$ ]]; then
   usage
   exit 2
 fi
@@ -43,15 +44,27 @@ source "${CONFIG_FILE}"
 : "${RESULTS_DIR:?RESULTS_DIR is required}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 WORKERS="${WORKERS:-128}"
+LIBRARYQC_BATCH_SIZE="${LIBRARYQC_BATCH_SIZE:-10000}"
 MAX_TOTAL_INDEX_MISMATCHES="${MAX_TOTAL_INDEX_MISMATCHES:-2}"
 MAX_PER_INDEX_MISMATCHES="${MAX_PER_INDEX_MISMATCHES:-2}"
 MIN_INDEX_DISTANCE_MARGIN="${MIN_INDEX_DISTANCE_MARGIN:-1}"
 I5_ORIENTATION="${I5_ORIENTATION:-auto}"
 PROGRESS_INTERVAL_SECONDS="${PROGRESS_INTERVAL_SECONDS:-30}"
 PROGRESS_CHECK_READS="${PROGRESS_CHECK_READS:-100000}"
+RESCUE_COMPRESSION_BACKEND="${RESCUE_COMPRESSION_BACKEND:-auto}"
+RESCUE_PIGZ_THREADS_PER_FILE="${RESCUE_PIGZ_THREADS_PER_FILE:-4}"
+NUMA_INTERLEAVE="${NUMA_INTERLEAVE:-auto}"
+NESTED_WORKER_THREADS="${NESTED_WORKER_THREADS:-1}"
 OVERALL_GATE_FRACTION="${OVERALL_GATE_FRACTION:-0.90}"
 MIN_UNSORTED_COUNT="${MIN_UNSORTED_COUNT:-50}"
 MIN_TOTAL_BIN_COUNT="${MIN_TOTAL_BIN_COUNT:-100}"
+
+# Multiprocessing stages own the parallelism. Prevent BLAS/OpenMP libraries
+# loaded by individual workers from multiplying 128 workers by extra threads.
+export OMP_NUM_THREADS="${NESTED_WORKER_THREADS}"
+export OPENBLAS_NUM_THREADS="${NESTED_WORKER_THREADS}"
+export MKL_NUM_THREADS="${NESTED_WORKER_THREADS}"
+export NUMEXPR_NUM_THREADS="${NESTED_WORKER_THREADS}"
 
 require_path() {
   local path="$1"
@@ -67,6 +80,129 @@ require_rescue_inputs() {
   : "${SAMPLE_SHEET:?SAMPLE_SHEET is required}"
   require_path "${RAW_DIR}" "raw-data directory"
   require_path "${SAMPLE_SHEET}" "SampleSheet"
+}
+
+detect_logical_cpus() {
+  getconf _NPROCESSORS_ONLN 2>/dev/null || echo "unknown"
+}
+
+detect_physical_cores() {
+  if command -v lscpu >/dev/null 2>&1; then
+    lscpu -p=CORE,SOCKET 2>/dev/null \
+      | awk -F, '!/^#/ {print $1 "," $2}' \
+      | sort -u \
+      | wc -l \
+      | tr -d ' '
+  else
+    echo "unknown"
+  fi
+}
+
+detect_sockets() {
+  if command -v lscpu >/dev/null 2>&1; then
+    lscpu -p=SOCKET 2>/dev/null \
+      | awk -F, '!/^#/ {print $1}' \
+      | sort -u \
+      | wc -l \
+      | tr -d ' '
+  else
+    echo "unknown"
+  fi
+}
+
+detect_numa_nodes() {
+  if command -v lscpu >/dev/null 2>&1; then
+    lscpu 2>/dev/null | awk -F: '/^NUMA node\(s\)/ {gsub(/ /, "", $2); print $2; found=1} END {if (!found) print "unknown"}'
+  else
+    echo "unknown"
+  fi
+}
+
+detect_memory_gib() {
+  awk '/^MemTotal:/ {printf "%.1f", $2 / 1024 / 1024}' /proc/meminfo 2>/dev/null || echo "unknown"
+}
+
+selected_compression_backend() {
+  if [[ "${RESCUE_COMPRESSION_BACKEND}" == "auto" ]]; then
+    if command -v pigz >/dev/null 2>&1; then
+      echo "pigz"
+    else
+      echo "parallel_python"
+    fi
+  else
+    echo "${RESCUE_COMPRESSION_BACKEND}"
+  fi
+}
+
+numa_interleave_enabled() {
+  case "${NUMA_INTERLEAVE}" in
+    1|true|yes)
+      command -v numactl >/dev/null 2>&1 && numactl --interleave=all true >/dev/null 2>&1
+      ;;
+    0|false|no)
+      return 1
+      ;;
+    auto)
+      local nodes
+      nodes="$(detect_numa_nodes)"
+      command -v numactl >/dev/null 2>&1 \
+        && [[ "${nodes}" =~ ^[0-9]+$ ]] \
+        && (( nodes > 1 )) \
+        && numactl --interleave=all true >/dev/null 2>&1
+      ;;
+    *)
+      echo "NUMA_INTERLEAVE must be auto, true/1, or false/0" >&2
+      return 2
+      ;;
+  esac
+}
+
+run_compute() {
+  if numa_interleave_enabled; then
+    numactl --interleave=all "$@"
+  else
+    "$@"
+  fi
+}
+
+show_resources() {
+  local numa_policy="disabled_or_unavailable"
+  if numa_interleave_enabled; then
+    numa_policy="interleave_all"
+  fi
+  echo "Sort-seq compute profile:"
+  echo "  logical_cpus: $(detect_logical_cpus)"
+  echo "  physical_cores: $(detect_physical_cores)"
+  echo "  sockets: $(detect_sockets)"
+  echo "  numa_nodes: $(detect_numa_nodes)"
+  echo "  memory_gib: $(detect_memory_gib)"
+  echo "  libraryqc_workers: ${WORKERS}"
+  echo "  libraryqc_batch_size: ${LIBRARYQC_BATCH_SIZE}"
+  echo "  rescue_compression: $(selected_compression_backend)"
+  echo "  pigz_threads_per_output: ${RESCUE_PIGZ_THREADS_PER_FILE}"
+  echo "  numa_policy: ${numa_policy}"
+}
+
+write_resource_profile() {
+  local target="${RESULTS_DIR}/resource_profile.tsv"
+  local numa_policy="disabled_or_unavailable"
+  if numa_interleave_enabled; then
+    numa_policy="interleave_all"
+  fi
+  {
+    printf 'field\tvalue\n'
+    printf 'generated_at\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')"
+    printf 'logical_cpus\t%s\n' "$(detect_logical_cpus)"
+    printf 'physical_cores\t%s\n' "$(detect_physical_cores)"
+    printf 'sockets\t%s\n' "$(detect_sockets)"
+    printf 'numa_nodes\t%s\n' "$(detect_numa_nodes)"
+    printf 'memory_gib\t%s\n' "$(detect_memory_gib)"
+    printf 'libraryqc_workers\t%s\n' "${WORKERS}"
+    printf 'libraryqc_batch_size\t%s\n' "${LIBRARYQC_BATCH_SIZE}"
+    printf 'rescue_compression\t%s\n' "$(selected_compression_backend)"
+    printf 'pigz_threads_per_output\t%s\n' "${RESCUE_PIGZ_THREADS_PER_FILE}"
+    printf 'numa_policy\t%s\n' "${numa_policy}"
+  } >"${target}"
 }
 
 mkdir -p "${RESULTS_DIR}"
@@ -201,11 +337,17 @@ if [[ "${MODE}" == "status" ]]; then
   exit 0
 fi
 
+if [[ "${MODE}" == "resources" ]]; then
+  show_resources
+  exit 0
+fi
+
 exec 9>"${LOCK_FILE}"
 if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
   echo "Another Sort-seq analysis is already running for ${RESULTS_DIR}." >&2
   exit 2
 fi
+write_resource_profile
 
 archive_existing_outputs() {
   local archive_root="${PROJECT_DIR:-$(dirname "${RESULTS_DIR}")}/archive"
@@ -222,7 +364,7 @@ archive_existing_outputs() {
 run_preflight() {
   require_rescue_inputs
   stage_begin "1/5" "Preflight: FASTQ and dual-index inspection"
-  "${PYTHON_BIN}" "${REPO_DIR}/scripts/rescue_dual_index.py" \
+  run_compute "${PYTHON_BIN}" "${REPO_DIR}/scripts/rescue_dual_index.py" \
     --mode inspect \
     --input-dir "${RAW_DIR}" \
     --sample-sheet "${SAMPLE_SHEET}" \
@@ -242,7 +384,7 @@ run_rescue() {
     exit 2
   fi
   stage_begin "2/5" "Rescue: uniquely assignable Undetermined reads"
-  "${PYTHON_BIN}" "${REPO_DIR}/scripts/rescue_dual_index.py" \
+  run_compute "${PYTHON_BIN}" "${REPO_DIR}/scripts/rescue_dual_index.py" \
     --mode rescue \
     --input-dir "${RAW_DIR}" \
     --sample-sheet "${SAMPLE_SHEET}" \
@@ -252,7 +394,9 @@ run_rescue() {
     --minimum-margin "${MIN_INDEX_DISTANCE_MARGIN}" \
     --i5-orientation "${I5_ORIENTATION}" \
     --progress-interval-seconds "${PROGRESS_INTERVAL_SECONDS}" \
-    --progress-check-reads "${PROGRESS_CHECK_READS}"
+    --progress-check-reads "${PROGRESS_CHECK_READS}" \
+    --compression-backend "${RESCUE_COMPRESSION_BACKEND}" \
+    --pigz-threads-per-file "${RESCUE_PIGZ_THREADS_PER_FILE}"
   stage_complete
 }
 
@@ -268,8 +412,9 @@ run_libraryqc() {
     exit 2
   fi
   stage_begin "3/5" "Library QC: FASTQ QC and UTR counting"
-  "${PYTHON_BIN}" "${LIBRARYQC_PY}" \
+  run_compute "${PYTHON_BIN}" "${LIBRARYQC_PY}" \
     --workers "${WORKERS}" \
+    --batch-size "${LIBRARYQC_BATCH_SIZE}" \
     --config "${LIBRARYQC_CONFIG}" \
     --input-dir "${RESULTS_DIR}/index_rescue/fastq" \
     --outdir "${RESULTS_DIR}/library_qc"
@@ -327,6 +472,7 @@ case "${MODE}" in
   analyze) run_analyze ;;
   plot) run_plot ;;
   status) show_status ;;
+  resources) show_resources ;;
   full)
     run_preflight
     run_rescue

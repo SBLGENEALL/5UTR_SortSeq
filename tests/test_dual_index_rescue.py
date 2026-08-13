@@ -2,6 +2,7 @@ import csv
 import gzip
 import importlib.util
 import json
+import random
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,26 @@ class DualIndexRescueTests(unittest.TestCase):
         oriented = MODULE.orient_expected(expected, "reverse_complement")
         self.assertEqual(oriented[0].i5, "TCGTACGT")
 
+    def test_fast_lookup_is_equivalent_to_reference_classifier(self):
+        expected = [MODULE.ExpectedIndex(*row) for row in SAMPLES]
+        fast = MODULE.FastIndexClassifier(expected, 2, 2, 1)
+        self.assertGreater(len(fast.lookup), 1_000)
+        for observed, fast_result in fast.lookup.items():
+            reference = MODULE.classify_index(observed, expected, 2, 2, 1)
+            self.assertEqual(fast_result, reference)
+            self.assertEqual(fast.classify(observed), reference)
+
+        generator = random.Random(260812)
+        for _ in range(1_000):
+            observed = (
+                "".join(generator.choice("ACGTN") for _ in range(8)),
+                "".join(generator.choice("ACGTN") for _ in range(8)),
+            )
+            self.assertEqual(
+                fast.classify(observed),
+                MODULE.classify_index(observed, expected, 2, 2, 1),
+            )
+
     def test_end_to_end_rescue_writes_extra_chunks_and_residual(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -103,6 +124,8 @@ class DualIndexRescueTests(unittest.TestCase):
                     "0",
                     "--progress-check-reads",
                     "1",
+                    "--compression-backend",
+                    "parallel_python",
                 ],
                 check=True,
                 capture_output=True,
@@ -114,11 +137,25 @@ class DualIndexRescueTests(unittest.TestCase):
             self.assertEqual(manifest["sample_rescued_counts"]["bin1"], 1)
             self.assertEqual(manifest["sample_rescued_counts"]["bin2"], 1)
             self.assertEqual(manifest["sample_rescued_counts"]["bin3"], 1)
+            self.assertEqual(
+                manifest["performance"]["selected_compression_backend"],
+                "parallel_python",
+            )
+            self.assertGreater(
+                manifest["performance"]["index_classifier"]["precomputed_lookup_hits"],
+                0,
+            )
             self.assertTrue((outdir / "fastq" / "bin1_L900_R1_001.fastq.gz").exists())
             self.assertTrue(
                 (outdir / "fastq" / "Undetermined_residual_L900_R1_001.fastq.gz").exists()
             )
             self.assertTrue((outdir / "fastq" / "bin1_S1_L001_R1_001.fastq.gz").is_symlink())
+            with gzip.open(
+                outdir / "fastq" / "bin1_L900_R1_001.fastq.gz",
+                "rt",
+                encoding="ascii",
+            ) as handle:
+                self.assertEqual(sum(1 for _ in handle), 4)
             self.assertIn("[rescue]", completed.stderr)
             self.assertIn("100.00%", completed.stderr)
             progress = json.loads((outdir / "rescue_progress.json").read_text())

@@ -74,6 +74,26 @@ export NUMEXPR_NUM_THREADS=1
 `sortseq.env`에서는 `WORKERS=128`, 기존 pDNA 분석에 실제로 사용한
 `LIBRARYQC_PY`와 `LIBRARYQC_CONFIG`, raw/config/results 경로를 확인합니다.
 
+현재 서버 성능과 실제 적용될 계산 설정도 확인합니다.
+
+```bash
+bash run_pipeline.sh resources
+```
+
+이번 서버에서 기대하는 주요 값은 다음과 같습니다.
+
+| 항목 | 값/정책 |
+|---|---|
+| logical CPUs | 256 |
+| physical cores | 128 |
+| sockets / NUMA nodes | 2 / 4 |
+| memory | 약 503 GiB |
+| LibraryQC | 128 workers, batch size 10,000 |
+| Rescue output | `pigz` 또는 내장 parallel Python gzip |
+| NUMA | `numactl` 사용 가능할 때 memory interleave |
+
+실제 탐지 결과는 `results/resource_profile.tsv`에도 기록됩니다.
+
 ## 전체 흐름 한눈에 보기
 
 | 단계 | 명령 | 질문 | 핵심 산출물 |
@@ -175,6 +195,33 @@ Undetermined FASTQ header의 i7+i5를 7개 expected dual-index pair와 비교합
 - 동률, index 누락, 거리 초과, R1/R2 불일치는 residual로 보존
 - 원본 FASTQ는 수정하지 않음
 
+### 왜 큰 gzip 하나를 128개로 바로 나누지 않는가
+
+현재 `undetermined_chunks=1`이므로 파일 단위 병렬 처리는 할 수 없습니다. 일반 gzip
+스트림은 압축 바이트를 임의 위치에서 잘라 독립적으로 풀 수 없고, FASTQ도 반드시
+4-line record와 R1/R2 pair 경계를 유지해야 합니다. 먼저 전부 해제해 수십 개의 임시
+파일로 나눈 뒤 병렬 처리할 수는 있지만, 직렬 해제와 대용량 임시 파일 쓰기·읽기가
+추가되어 보통 이 분석에는 불리합니다.
+
+따라서 rescue는 입력을 한 번만 스트리밍하면서 다음을 병렬·최적화합니다.
+
+- rescue 가능한 dual-index 조합을 미리 계산해 read당 7회 거리 계산을 O(1) lookup으로 변경
+- sample별 R1/R2 출력 gzip을 독립 프로세스로 동시에 압축(최대 16 output streams)
+- `pigz`가 서버에 이미 있으면 output당 기본 4 thread 사용
+- `pigz`가 없어도 번들된 Python compressor process를 사용하므로 추가 설치 불필요
+
+기본값은 private `sortseq.env`에 항목이 없어도 자동 적용됩니다.
+
+```bash
+RESCUE_COMPRESSION_BACKEND=auto
+RESCUE_PIGZ_THREADS_PER_FILE=4
+```
+
+입력 gzip 해제 자체는 하나의 스트림이라는 제한이 남습니다. 다만 기존처럼 index 비교와
+모든 결과 재압축까지 한 코어에서 처리하지 않기 때문에 rescue 전체 속도가 개선됩니다.
+`rescue_manifest.json`의 `performance`에서 선택된 backend와 lookup hit 수를 확인할 수
+있습니다.
+
 ### 실행
 
 ```bash
@@ -221,7 +268,9 @@ cat /data/user/MCET03/03_NGS/02_5UTR_sorting/results/index_rescue/rescue_summary
 
 기존 pDNA 분석과 같은 reference, primer/anchor, exact/near-match 규칙으로 모든
 sample의 UTR raw count를 계산합니다. 이 단계가 `WORKERS=128`을 사용하는 주된
-병렬 계산 단계입니다.
+병렬 계산 단계입니다. 기본 batch size는 10,000이며, 503 GiB RAM에서 process 간
+전달 횟수를 줄이도록 설정했습니다. 각 worker 내부 BLAS/OpenMP thread는 1개로 제한해
+128 workers가 다시 중첩 thread를 생성하지 않게 합니다.
 
 ### 실행
 

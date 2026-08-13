@@ -10,6 +10,28 @@ SCRIPT = Path(__file__).resolve().parents[1] / "run_pipeline.sh"
 
 
 class PipelineStatusTests(unittest.TestCase):
+    def test_resources_reports_parallel_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "sortseq.env"
+            config.write_text(
+                f"RESULTS_DIR={root / 'results'}\n"
+                "WORKERS=128\n"
+                "LIBRARYQC_BATCH_SIZE=10000\n"
+                "RESCUE_COMPRESSION_BACKEND=parallel_python\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                ["bash", str(SCRIPT), "resources"],
+                env={**os.environ, "SORTSEQ_PROJECT_CONFIG": str(config)},
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn("libraryqc_workers: 128", completed.stdout)
+            self.assertIn("libraryqc_batch_size: 10000", completed.stdout)
+            self.assertIn("rescue_compression: parallel_python", completed.stdout)
+
     def test_status_reports_rescue_progress_and_checkpoints(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
