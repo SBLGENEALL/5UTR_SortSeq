@@ -36,15 +36,22 @@ python -m pip install -r requirements.txt
 Rscript scripts/install_r_packages.R
 ```
 
-FASTQ 이름에서 7개 sample prefix를 자동으로 읽어 설정 초안을 만듭니다.
+FASTQ 이름에서 7개 sample prefix를 읽고, 원래 NGS run SampleSheet의 실제
+`Sample_ID/index/index2`를 검증하여 설정 파일을 만듭니다.
 
 ```bash
 python scripts/init_project.py \
   --raw-dir /data/user/MCET03/03_NGS/02_5UTR_sorting/raw_data \
-  --config-dir /data/user/MCET03/03_NGS/02_5UTR_sorting/config
+  --config-dir /data/user/MCET03/03_NGS/02_5UTR_sorting/config \
+  --run-sample-sheet /data/user/MCET03/03_NGS/02_5UTR_sorting/raw_data/Analysis/1/Data/260812_sample_sheet.csv
 ```
 
-예를 들어 `UTR_bin1_A2_s1_R1_001.fastq.gz`는 `UTR_bin1_A2`로 인식됩니다. 생성된 `SampleSheet.csv`의 `REPLACE_I7`, `REPLACE_I5`를 실제 7개 index로 바꾸고 `sample_map.csv`를 확인합니다.
+`--run-sample-sheet`를 생략해도 `raw_data/Analysis` 아래에 sample-sheet CSV가
+정확히 하나뿐이면 자동으로 찾습니다. 예를 들어
+`UTR_bin1_A2_s1_R1_001.fastq.gz`는 `UTR_bin1_A2`로 인식되고, 원래
+SampleSheet의 같은 `Sample_ID`에서 실제 i7/i5를 가져옵니다. 생성된
+`SampleSheet.csv`에는 index가 이미 채워지므로 `sample_map.csv`의 bin 방향만
+확인하면 됩니다.
 
 ```bash
 cp config/project.env.example \

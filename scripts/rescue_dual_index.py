@@ -159,8 +159,9 @@ def read_sample_sheet(path: Path) -> list[ExpectedIndex]:
     lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
     data_start = 0
     sectioned = False
+    data_sections = {"[data]", "[bclconvert_data]"}
     for number, line in enumerate(lines):
-        if line.strip().lower() == "[data]":
+        if line.strip().lower() in data_sections:
             data_start = number + 1
             sectioned = True
             break

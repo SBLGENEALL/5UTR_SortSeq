@@ -20,13 +20,14 @@
 ```bash
 python scripts/init_project.py \
   --raw-dir /data/user/MCET03/03_NGS/02_5UTR_sorting/raw_data \
-  --config-dir /data/user/MCET03/03_NGS/02_5UTR_sorting/config
+  --config-dir /data/user/MCET03/03_NGS/02_5UTR_sorting/config \
+  --run-sample-sheet /data/user/MCET03/03_NGS/02_5UTR_sorting/raw_data/Analysis/1/Data/260812_sample_sheet.csv
 ```
 
 다음 세 파일이 생깁니다.
 
 - `detected_fastq_samples.csv`: 파일명에서 읽은 7개 sample prefix
-- `SampleSheet.csv`: index rescue용; 실제 i7/i5를 반드시 입력
+- `SampleSheet.csv`: 원래 run SampleSheet에서 검증·추출한 실제 i7/i5
 - `sample_map.csv`: NGS count matrix 열과 bin 의미 연결
 
 `UTR_bin1_A2_s1_R1_001.fastq.gz`의 경우:
@@ -38,15 +39,23 @@ bin1,UTR_bin1_A2,bin,1,0.05
 
 처럼 연결됩니다. 파일명의 `A2`나 `s1` 자체가 dual index 서열이라는 뜻은 아닙니다. 실제 index는 `SampleSheet.csv`와 FASTQ header 마지막의 `I7+I5`를 사용합니다.
 
-## 3. 실제 index 입력
+## 3. 실제 index 자동 추출
 
-`SampleSheet.csv`에서 각 `Sample_ID`는 FASTQ prefix와 정확히 같아야 합니다.
+파이프라인은 원래 run SampleSheet의 `[Data]` 또는 `[BCLConvert_Data]` 구역에서
+대소문자와 관계없이 `Sample_ID`, `index`, `index2` 열을 읽습니다. 각
+`Sample_ID`는 FASTQ prefix와 정확히 또는 안전하게 정규화했을 때 1:1로
+일치해야 합니다.
 
 ```csv
 [Data]
 Sample_ID,index,index2
 UTR_bin1_A2,ACTUAL_I7,ACTUAL_I5
 ```
+
+일치하지 않거나 중복이면 index를 추측하지 않고 setup이 중단됩니다.
+`--run-sample-sheet`를 생략하면 `raw_data/Analysis` 아래의 `*sample_sheet*.csv`
+또는 `*SampleSheet*.csv`가 정확히 하나일 때 자동 사용합니다. 후보가 여러 개면
+명시 경로를 요구합니다.
 
 `index2`의 방향은 주문서/샘플시트 표기와 FASTQ header 표기가 장비·conversion 설정에 따라 다를 수 있습니다. `I5_ORIENTATION=auto`가 as-given과 reverse-complement를 비교하고 선택합니다.
 
