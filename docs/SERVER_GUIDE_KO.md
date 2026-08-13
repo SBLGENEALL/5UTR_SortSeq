@@ -100,20 +100,20 @@ header에 `i7+i5`가 없으면 FASTQ만으로 read-level rescue할 수 없습니
 
 ## 7. 실행과 재실행
 
-```bash
-bash run_pipeline.sh full
-```
-
-단계별 실행:
+각 단계의 결과를 이해하고 확인하기 쉽도록 다음처럼 하나씩 실행하는 것을
+권장합니다. 자세한 목적과 완료 판정은
+[PIPELINE_WORKFLOW_KO.md](PIPELINE_WORKFLOW_KO.md)를 참고하세요.
 
 ```bash
+bash run_pipeline.sh preflight
 bash run_pipeline.sh rescue
 bash run_pipeline.sh libraryqc
 bash run_pipeline.sh analyze
 bash run_pipeline.sh plot
 ```
 
-기존 결과가 있으면 기본적으로 중단합니다. 보존 후 재실행:
+완료된 단계는 다시 실행하지 않고 다음 단계부터 이어갑니다. 기존 결과가 있으면
+기본적으로 중단합니다. 모든 결과를 archive로 보존하고 처음부터 다시 실행할 때만:
 
 ```bash
 bash run_pipeline.sh full --replace
