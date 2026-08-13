@@ -1,0 +1,28 @@
+# Sequencing inputs and generated outputs
+raw_data/
+results/
+archive/
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+
+# Project-specific configuration (may contain real dual indexes and server paths)
+config/project.env
+config/SampleSheet.csv
+config/sample_map.csv
+config/detected_fastq_samples.csv
+*.local.env
+
+# Python/R/editor artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.Rhistory
+.RData
+.DS_Store
+.idea/
+.vscode/
+
+# Archives are release artifacts, not source
+*.zip

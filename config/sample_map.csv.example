@@ -1,0 +1,8 @@
+sample_id,ngs_column,sample_type,bin_number,population_fraction,cells_collected,representative_log10_mfi
+bin1,REPLACE_WITH_BIN1_FASTQ_PREFIX,bin,1,0.05,,
+bin2,REPLACE_WITH_BIN2_FASTQ_PREFIX,bin,2,0.10,,
+bin3,REPLACE_WITH_BIN3_FASTQ_PREFIX,bin,3,0.15,,
+bin4,REPLACE_WITH_BIN4_FASTQ_PREFIX,bin,4,0.20,,
+bin5,REPLACE_WITH_BIN5_FASTQ_PREFIX,bin,5,0.30,,
+bin6,REPLACE_WITH_BIN6_FASTQ_PREFIX,bin,6,0.20,,
+unsorted,REPLACE_WITH_UNSORTED_FASTQ_PREFIX,unsorted,,,,
