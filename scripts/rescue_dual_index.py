@@ -13,15 +13,18 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import io
 import json
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
-from typing import Iterable, Iterator, TextIO
+from typing import Callable, Iterable, Iterator, TextIO
 
 
 FASTQ_SUFFIX_RE = re.compile(r"\.(?:fastq|fq)(?:\.gz)?$", re.IGNORECASE)
@@ -74,8 +77,19 @@ def open_text(path: Path, mode: str = "rt", compresslevel: int = 1):
     return path.open(mode, encoding=None if "b" in mode else "ascii")
 
 
-def iter_fastq(path: Path) -> Iterator[FastqRecord]:
-    with open_text(path, "rt") as handle:
+def iter_fastq(
+    path: Path,
+    compressed_position_callback: Callable[[int], None] | None = None,
+) -> Iterator[FastqRecord]:
+    raw_handle = None
+    stack = ExitStack()
+    try:
+        if path.suffix.lower() == ".gz" and compressed_position_callback is not None:
+            raw_handle = stack.enter_context(path.open("rb"))
+            gzip_handle = stack.enter_context(gzip.GzipFile(fileobj=raw_handle, mode="rb"))
+            handle = stack.enter_context(io.TextIOWrapper(gzip_handle, encoding="ascii"))
+        else:
+            handle = stack.enter_context(open_text(path, "rt"))
         line_number = 0
         while True:
             header = handle.readline()
@@ -97,7 +111,12 @@ def iter_fastq(path: Path) -> Iterator[FastqRecord]:
                 raise ValueError(f"invalid FASTQ record near line {line_number}: {path}")
             if len(record.sequence) != len(record.quality):
                 raise ValueError(f"sequence/quality length mismatch near line {line_number}: {path}")
+            if compressed_position_callback is not None:
+                position = raw_handle.tell() if raw_handle is not None else handle.tell()
+                compressed_position_callback(position)
             yield record
+    finally:
+        stack.close()
 
 
 def write_record(handle: TextIO, record: FastqRecord) -> None:
@@ -352,6 +371,93 @@ class LazyFastqWriters:
         self.stack.close()
 
 
+def format_duration(seconds: float | None) -> str:
+    if seconds is None or seconds < 0:
+        return "unknown"
+    rounded = int(round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes:d}m {secs:02d}s"
+    return f"{secs:d}s"
+
+
+class RescueProgressReporter:
+    """Periodically report rescue progress without external dependencies."""
+
+    def __init__(
+        self,
+        output_path: Path,
+        total_compressed_r1_bytes: int,
+        interval_seconds: float,
+    ):
+        self.output_path = output_path
+        self.total_bytes = max(total_compressed_r1_bytes, 1)
+        self.interval_seconds = interval_seconds
+        self.started_monotonic = time.monotonic()
+        self.started_at = datetime.now(timezone.utc).isoformat()
+        self.last_report_monotonic = 0.0
+
+    def report(
+        self,
+        processed: int,
+        rescued: int,
+        bytes_done: int,
+        chunk_number: int,
+        chunk_count: int,
+        force: bool = False,
+        status: str = "running",
+    ) -> None:
+        now = time.monotonic()
+        if not force and now - self.last_report_monotonic < self.interval_seconds:
+            return
+        elapsed = max(now - self.started_monotonic, 1e-9)
+        bounded_bytes = min(max(bytes_done, 0), self.total_bytes)
+        fraction = bounded_bytes / self.total_bytes
+        read_rate = processed / elapsed
+        byte_rate = bounded_bytes / elapsed
+        eta_seconds = (
+            (self.total_bytes - bounded_bytes) / byte_rate
+            if byte_rate > 0 and bounded_bytes < self.total_bytes
+            else 0.0 if bounded_bytes >= self.total_bytes else None
+        )
+        rescue_percent = 100 * rescued / processed if processed else 0.0
+        payload = {
+            "status": status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": self.started_at,
+            "chunk": chunk_number,
+            "chunks_total": chunk_count,
+            "processed_read_pairs_or_reads": processed,
+            "rescued_read_pairs_or_reads": rescued,
+            "rescued_percent_so_far": rescue_percent,
+            "compressed_r1_bytes_processed": bounded_bytes,
+            "compressed_r1_bytes_total": self.total_bytes,
+            "progress_percent": 100 * fraction,
+            "read_pairs_or_reads_per_second": read_rate,
+            "elapsed_seconds": elapsed,
+            "eta_seconds": eta_seconds,
+        }
+        temporary = self.output_path.with_suffix(self.output_path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(self.output_path)
+        eta_text = format_duration(eta_seconds)
+        print(
+            f"[rescue] {100 * fraction:6.2f}% | chunk {chunk_number}/{chunk_count} | "
+            f"processed {processed:,} | rescued {rescued:,} ({rescue_percent:.2f}%) | "
+            f"{read_rate:,.0f} read pairs/s | elapsed {format_duration(elapsed)} | "
+            f"ETA {eta_text}",
+            file=sys.stderr,
+            flush=True,
+        )
+        self.last_report_monotonic = now
+
+
 def minimum_expected_pair_distance(records: list[ExpectedIndex]) -> int:
     distances: list[int] = []
     for left_index, left in enumerate(records):
@@ -379,6 +485,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--orientation-scan-reads", type=int, default=100_000)
     parser.add_argument("--compresslevel", type=int, choices=range(1, 10), default=1)
+    parser.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=30.0,
+        help="Seconds between rescue progress updates (default: 30)",
+    )
+    parser.add_argument(
+        "--progress-check-reads",
+        type=int,
+        default=100_000,
+        help="Check whether a progress update is due every N reads/read pairs",
+    )
     return parser.parse_args()
 
 
@@ -388,6 +506,10 @@ def main() -> int:
         raise ValueError("mismatch limits cannot be negative")
     if args.minimum_margin < 1:
         raise ValueError("--minimum-margin must be at least 1")
+    if args.progress_interval_seconds < 0:
+        raise ValueError("--progress-interval-seconds cannot be negative")
+    if args.progress_check_reads < 1:
+        raise ValueError("--progress-check-reads must be at least 1")
     parsed, warnings = discover_fastqs(args.input_dir)
     if not parsed:
         raise ValueError(f"no R1/R2 FASTQ files found under {args.input_dir}")
@@ -455,15 +577,28 @@ def main() -> int:
     sample_counts: Counter[str] = Counter()
     distance_pairs: Counter[tuple[int, int]] = Counter()
     observed_barcodes: Counter[str] = Counter()
+    total_r1_bytes = sum(r1_file.path.stat().st_size for r1_file, _ in undetermined_pairs)
+    completed_r1_bytes = 0
+    progress = RescueProgressReporter(
+        args.outdir / "rescue_progress.json",
+        total_r1_bytes,
+        args.progress_interval_seconds,
+    )
+    progress.report(0, 0, 0, 1, len(undetermined_pairs), force=True)
 
     for chunk_number, (r1_file, r2_file) in enumerate(undetermined_pairs, start=1):
+        r1_size = r1_file.path.stat().st_size
         writers = LazyFastqWriters(
             output_fastq_dir,
             chunk_number,
             r2_file is not None,
             args.compresslevel,
         )
-        iterator1 = iter_fastq(r1_file.path)
+        current_r1_position = [0]
+        iterator1 = iter_fastq(
+            r1_file.path,
+            lambda position: current_r1_position.__setitem__(0, position),
+        )
         iterator2 = iter_fastq(r2_file.path) if r2_file else None
         iterator = (
             zip_longest(iterator1, iterator2)
@@ -475,6 +610,15 @@ def main() -> int:
                 if record1 is None or (r2_file is not None and record2 is None):
                     raise ValueError(f"R1/R2 record count mismatch: {r1_file.path}, {r2_file.path}")
                 status_counts["total_undetermined_read_pairs_or_reads"] += 1
+                processed = status_counts["total_undetermined_read_pairs_or_reads"]
+                if processed % args.progress_check_reads == 0:
+                    progress.report(
+                        processed,
+                        sum(sample_counts.values()),
+                        completed_r1_bytes + min(current_r1_position[0], r1_size),
+                        chunk_number,
+                        len(undetermined_pairs),
+                    )
                 if record2 is not None and canonical_read_id(record1.header) != canonical_read_id(record2.header):
                     status_counts["pair_header_mismatch"] += 1
                     writers.write("Undetermined_residual", record1, record2)
@@ -504,6 +648,15 @@ def main() -> int:
                     writers.write(sample, record1, record2)
         finally:
             writers.close()
+        completed_r1_bytes += r1_size
+        progress.report(
+            status_counts["total_undetermined_read_pairs_or_reads"],
+            sum(sample_counts.values()),
+            completed_r1_bytes,
+            chunk_number,
+            len(undetermined_pairs),
+            force=True,
+        )
 
     rescued_total = sum(sample_counts.values())
     total = status_counts["total_undetermined_read_pairs_or_reads"]
@@ -563,6 +716,15 @@ def main() -> int:
     }
     (args.outdir / "rescue_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    progress.report(
+        total,
+        rescued_total,
+        total_r1_bytes,
+        len(undetermined_pairs),
+        len(undetermined_pairs),
+        force=True,
+        status="completed",
     )
     print(
         f"Rescued {rescued_total:,}/{total:,} Undetermined read pairs/reads "

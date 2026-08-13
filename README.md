@@ -11,6 +11,16 @@
 > PC에서 받아 서버로 옮기고, 서버에서는 기존 pDNA QC Python/R 환경과
 > `NGS_LibraryQC`를 재사용합니다.
 
+실행 중 진행상황은 별도 터미널에서 다음 명령으로 확인할 수 있습니다.
+
+```bash
+export SORTSEQ_PROJECT_CONFIG=/data/user/MCET03/03_NGS/02_5UTR_sorting/config/sortseq.env
+bash run_pipeline.sh status
+```
+
+Rescue 단계는 30초마다 진행률, 처리 read 수, 속도, rescue율, 경과시간과 ETA를
+출력하고 `results/index_rescue/rescue_progress.json`에도 기록합니다.
+
 이 저장소는 기존 [`NGS_LibraryQC`](https://github.com/SBLGENEALL/NGS_LibraryQC)를 대체하지 않습니다. 역할을 다음처럼 분리합니다.
 
 | 단계 | 담당 |

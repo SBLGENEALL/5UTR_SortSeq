@@ -87,7 +87,7 @@ class DualIndexRescueTests(unittest.TestCase):
             write_fastq(raw / "Undetermined_S0_L001_R2_001.fastq.gz", undetermined_indexes)
 
             outdir = root / "out"
-            subprocess.run(
+            completed = subprocess.run(
                 [
                     sys.executable,
                     str(SCRIPT),
@@ -99,6 +99,10 @@ class DualIndexRescueTests(unittest.TestCase):
                     str(outdir),
                     "--orientation-scan-reads",
                     "10",
+                    "--progress-interval-seconds",
+                    "0",
+                    "--progress-check-reads",
+                    "1",
                 ],
                 check=True,
                 capture_output=True,
@@ -115,6 +119,12 @@ class DualIndexRescueTests(unittest.TestCase):
                 (outdir / "fastq" / "Undetermined_residual_L900_R1_001.fastq.gz").exists()
             )
             self.assertTrue((outdir / "fastq" / "bin1_S1_L001_R1_001.fastq.gz").is_symlink())
+            self.assertIn("[rescue]", completed.stderr)
+            self.assertIn("100.00%", completed.stderr)
+            progress = json.loads((outdir / "rescue_progress.json").read_text())
+            self.assertEqual(progress["status"], "completed")
+            self.assertAlmostEqual(progress["progress_percent"], 100.0)
+            self.assertEqual(progress["processed_read_pairs_or_reads"], 4)
 
 
 if __name__ == "__main__":

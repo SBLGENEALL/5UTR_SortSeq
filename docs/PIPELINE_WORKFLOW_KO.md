@@ -84,6 +84,45 @@ export NUMEXPR_NUM_THREADS=1
 | 4/5 | `analyze` | bin 크기와 NGS depth 보정 후 어떤 UTR이 high인가? | `utr_results_*.tsv` |
 | 5/5 | `plot` | QC와 후보를 어떻게 시각적으로 검토할 것인가? | PNG, PDF |
 
+## 실행 중 진행상황 확인
+
+새 터미널에서 기존 분석 환경을 활성화하고 다음을 실행합니다.
+
+```bash
+cd /data/user/MCET03/03_NGS/02_5UTR_sorting/5UTR_SortSeq-main
+export SORTSEQ_PROJECT_CONFIG=/data/user/MCET03/03_NGS/02_5UTR_sorting/config/sortseq.env
+bash run_pipeline.sh status
+```
+
+이 명령은 분석을 건드리지 않고 다음을 보여줍니다.
+
+- 분석 프로세스가 `RUNNING`인지 `IDLE`인지
+- 현재 또는 가장 최근 단계와 시작/완료/실패 상태
+- rescue 진행률, 처리 read 수, 처리속도, 현재 rescue율과 ETA
+- 1/5–5/5 checkpoint 파일 생성 여부
+
+각 단계는 시작·완료 시각과 소요시간을 터미널에 표시하고 다음 파일에 남깁니다.
+
+```text
+results/pipeline_status.tsv
+results/pipeline_history.tsv
+```
+
+Rescue는 기본 30초마다 다음과 비슷하게 갱신됩니다.
+
+```text
+[rescue] 42.50% | chunk 1/1 | processed 12,500,000 | rescued 10,000,000 (80.00%) | 25,000 read pairs/s | elapsed 8m 20s | ETA 11m 16s
+```
+
+진행률은 R1 gzip 파일에서 읽은 **압축 바이트 비율의 근사값**입니다. gzip read-ahead
+때문에 아주 작게 흔들릴 수 있지만 대용량 FASTQ의 전체 진행상황과 ETA를 보는 데
+적합합니다. 표시 간격은 private `sortseq.env`에서 바꿀 수 있습니다.
+
+```bash
+PROGRESS_INTERVAL_SECONDS=30
+PROGRESS_CHECK_READS=100000
+```
+
 ---
 
 ## 1/5. Preflight: 실제 분석 전 안전 점검
@@ -142,6 +181,9 @@ Undetermined FASTQ header의 i7+i5를 7개 expected dual-index pair와 비교합
 bash run_pipeline.sh rescue 2>&1 | tee \
   /data/user/MCET03/03_NGS/02_5UTR_sorting/rescue.log
 ```
+
+실행 터미널에는 약 30초마다 진행률과 ETA가 출력되며, 다른 터미널에서는
+`bash run_pipeline.sh status`로 같은 상태를 확인할 수 있습니다.
 
 ### 결과 구조
 
