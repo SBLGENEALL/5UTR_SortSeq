@@ -55,6 +55,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-total-bin-count", type=int, default=100)
     parser.add_argument("--overall-gate-fraction", type=float, default=0.90)
     parser.add_argument("--top-n", type=int, default=50)
+    parser.add_argument(
+        "--reference-variant-id",
+        default="auto",
+        help=(
+            "Reference/control variant ID. 'auto' recognizes original/orginal "
+            "case-insensitively; 'none' disables reference comparison."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -83,6 +91,54 @@ def load_variants(path: Path, id_column: str) -> pd.DataFrame:
         duplicated = variants.loc[variants[id_column].duplicated(), id_column].tolist()
         raise ValueError(f"variant IDs must be unique; duplicates include {duplicated[:5]}")
     return variants
+
+
+def resolve_reference_variant_id(
+    variants: pd.DataFrame,
+    id_column: str,
+    requested: str | None,
+) -> str | None:
+    """Resolve an explicit ID or the common original/orginal control aliases."""
+    value = "auto" if requested is None else str(requested).strip()
+    if value.lower() in {"", "none", "off", "false"}:
+        return None
+    identifiers = variants[id_column].astype(str)
+    normalized = identifiers.str.strip().str.lower()
+    aliases = {"original", "orginal"} if value.lower() == "auto" else {value.lower()}
+    direct_mask = normalized.isin(aliases)
+    original_ids_mask = pd.Series(False, index=variants.index)
+    if "original_variant_ids" in variants.columns:
+        original_ids_mask = variants["original_variant_ids"].fillna("").astype(str).map(
+            lambda item: any(part.strip().lower() in aliases for part in item.split("|"))
+        )
+    matches = variants.loc[direct_mask | original_ids_mask, id_column]
+    values = matches.astype(str).tolist()
+    if len(values) == 0:
+        if value.lower() == "auto":
+            return None
+        raise ValueError(f"reference variant ID not found: {value!r}")
+    if len(values) > 1:
+        raise ValueError(f"reference variant ID is ambiguous: {values}")
+    return values[0]
+
+
+def reference_display_label(
+    variants: pd.DataFrame,
+    id_column: str,
+    reference_variant_id: str | None,
+) -> str | None:
+    if reference_variant_id is None:
+        return None
+    row = variants.loc[variants[id_column].astype(str).eq(reference_variant_id)].iloc[0]
+    if "original_variant_ids" in variants.columns:
+        identifiers = str(row["original_variant_ids"]).split("|")
+        original_alias = next(
+            (item.strip() for item in identifiers if item.strip().lower() in {"original", "orginal"}),
+            None,
+        )
+        if original_alias:
+            return original_alias
+    return reference_variant_id
 
 
 def load_samples(path: Path) -> pd.DataFrame:
@@ -234,6 +290,8 @@ def analyze(
     min_unsorted_count: int,
     min_total_bin_count: int,
     overall_gate_fraction: float,
+    reference_variant_id: str | None = None,
+    reference_label: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     if pseudocount <= 0:
         raise ValueError("pseudocount must be positive")
@@ -390,6 +448,67 @@ def analyze(
         & (result["high15_enrichment"] >= 1.5)
     )
 
+    reference_summary: dict[str, object] = {
+        "reference_variant_id": reference_variant_id,
+        "reference_display_label": reference_label,
+        "reference_comparison_enabled": reference_variant_id is not None,
+    }
+    result["is_reference_variant"] = False
+    if reference_variant_id is not None:
+        if reference_variant_id not in result.index:
+            raise ValueError(f"reference variant ID not found in analysis result: {reference_variant_id!r}")
+        reference = result.loc[reference_variant_id]
+        if not bool(reference["pass_coverage"]):
+            raise ValueError(
+                f"reference variant {reference_variant_id!r} failed the coverage filter; "
+                "reference-relative ranking would be unreliable"
+            )
+        reference_score = float(reference["expected_bin_score"])
+        reference_high15 = float(reference["high15_probability"])
+        reference_high15_enrichment = float(reference["high15_enrichment"])
+        result.loc[reference_variant_id, "is_reference_variant"] = True
+        result["reference_display_label"] = reference_label or reference_variant_id
+        result["reference_expected_bin_score"] = reference_score
+        result["delta_score_vs_reference"] = result["expected_bin_score"] - reference_score
+        result["reference_high15_probability"] = reference_high15
+        result["delta_high15_probability_vs_reference"] = (
+            result["high15_probability"] - reference_high15
+        )
+        result["high15_fold_vs_reference"] = (
+            result["high15_probability"] / reference_high15
+            if reference_high15 > 0
+            else np.nan
+        )
+        result["score_above_reference"] = (
+            result["pass_coverage"] & (result["delta_score_vs_reference"] > 0)
+        )
+        result["score_and_high15_above_reference"] = (
+            result["score_above_reference"]
+            & (result["delta_high15_probability_vs_reference"] > 0)
+        )
+        reference_summary.update(
+            {
+                "reference_pass_coverage": True,
+                "reference_expected_bin_score": reference_score,
+                "reference_high15_probability": reference_high15,
+                "reference_high15_enrichment": reference_high15_enrichment,
+                "reference_estimated_rank": float(reference["estimated_rank"]),
+                "reference_expression_percentile": float(reference["expression_percentile"]),
+                "variants_with_score_above_reference": int(
+                    result["score_above_reference"].sum()
+                ),
+                "variants_with_score_and_high15_above_reference": int(
+                    result["score_and_high15_above_reference"].sum()
+                ),
+                "high_candidates_above_reference": int(
+                    (
+                        result["high_candidate_flag"]
+                        & result["score_and_high15_above_reference"]
+                    ).sum()
+                ),
+            }
+        )
+
     result = result.reset_index().sort_values(
         ["pass_coverage", "estimated_rank"], ascending=[False, True], na_position="last"
     )
@@ -411,6 +530,17 @@ def analyze(
         "expression_tier",
         "high_candidate_flag",
     ]
+    if reference_variant_id is not None:
+        essential_columns.extend(
+            [
+                "is_reference_variant",
+                "delta_score_vs_reference",
+                "delta_high15_probability_vs_reference",
+                "high15_fold_vs_reference",
+                "score_above_reference",
+                "score_and_high15_above_reference",
+            ]
+        )
     if "expected_log10_mfi" in result.columns:
         essential_columns.insert(7, "expected_log10_mfi")
     essential = result[essential_columns].copy()
@@ -444,6 +574,7 @@ def analyze(
         "gate_vs_unsorted_spearman_p": gate_unsorted_p,
         "min_unsorted_count": min_unsorted_count,
         "min_total_bin_count": min_total_bin_count,
+        **reference_summary,
     }
     return result, essential, summary
 
@@ -480,6 +611,11 @@ def make_plots(
     written.append(path)
 
     passing = result[result["pass_coverage"]].copy()
+    reference_rows = (
+        passing[passing["is_reference_variant"]]
+        if "is_reference_variant" in passing.columns
+        else passing.iloc[0:0]
+    )
     if not passing.empty:
         fig, ax = plt.subplots(figsize=(6.2, 4.8))
         sns.scatterplot(
@@ -493,6 +629,26 @@ def make_plots(
             ax=ax,
         )
         ax.axhline(1.0, color="black", linestyle="--", linewidth=1)
+        if len(reference_rows) == 1:
+            reference = reference_rows.iloc[0]
+            ax.scatter(
+                reference["expected_bin_score"],
+                reference["high15_enrichment"],
+                marker="*",
+                s=260,
+                color="#D62728",
+                edgecolor="white",
+                linewidth=0.9,
+                zorder=10,
+            )
+            ax.annotate(
+                f"reference: {reference.get('reference_display_label', reference[id_column])}",
+                (reference["expected_bin_score"], reference["high15_enrichment"]),
+                xytext=(8, 8),
+                textcoords="offset points",
+                color="#B2182B",
+                weight="bold",
+            )
         ax.set_xlabel("Expected bin score (6=high, 1=low)")
         ax.set_ylabel("Top-15% enrichment (1=pool average)")
         fig.tight_layout()
@@ -502,8 +658,14 @@ def make_plots(
         written.append(path)
 
         top = passing.nsmallest(min(top_n, len(passing)), "estimated_rank")
+        if len(reference_rows) == 1 and not top[id_column].eq(reference_rows.iloc[0][id_column]).any():
+            top = pd.concat([top, reference_rows], ignore_index=True)
         probability_columns = [f"bin{x}_probability" for x in range(1, 7)]
-        profile = top.set_index(id_column)[probability_columns]
+        display_ids = top[id_column].astype(str).where(
+            ~top["is_reference_variant"],
+            top.get("reference_display_label", top[id_column]).astype(str) + " [reference]",
+        )
+        profile = top.assign(_display_id=display_ids).set_index("_display_id")[probability_columns]
         fig, ax = plt.subplots(figsize=(7.2, max(4.5, min(16, len(profile) * 0.24))))
         sns.heatmap(
             profile,
@@ -515,7 +677,10 @@ def make_plots(
         )
         ax.set_xlabel("bin1 = highest mCherry; bin6 = lowest mCherry-positive")
         ax.set_ylabel(id_column)
-        ax.set_title(f"Top {len(profile)} UTR bin distributions")
+        ax.set_title(
+            f"Top {top_n} UTR bin distributions"
+            + (" + reference" if len(reference_rows) == 1 else "")
+        )
         fig.tight_layout()
         path = plot_dir / "03_top_utr_bin_heatmap.png"
         fig.savefig(path, dpi=180)
@@ -534,6 +699,29 @@ def make_plots(
                 s=10,
                 alpha=0.45,
             )
+            reference_positive = positive[positive["is_reference_variant"]]
+            if len(reference_positive) == 1:
+                reference = reference_positive.iloc[0]
+                ref_x = np.log10(reference["unsorted_frequency"])
+                ref_y = np.log10(reference["reconstructed_gate_frequency"])
+                ax.scatter(
+                    ref_x,
+                    ref_y,
+                    marker="*",
+                    s=260,
+                    color="#D62728",
+                    edgecolor="white",
+                    linewidth=0.9,
+                    zorder=10,
+                )
+                ax.annotate(
+                    f"reference: {reference.get('reference_display_label', reference[id_column])}",
+                    (ref_x, ref_y),
+                    xytext=(8, 8),
+                    textcoords="offset points",
+                    color="#B2182B",
+                    weight="bold",
+                )
             lo = min(ax.get_xlim()[0], ax.get_ylim()[0])
             hi = max(ax.get_xlim()[1], ax.get_ylim()[1])
             ax.plot([lo, hi], [lo, hi], "--", color="black", linewidth=1)
@@ -542,6 +730,31 @@ def make_plots(
             ax.set_title("Whole unsorted vs mCherry+/GFP- gate")
             fig.tight_layout()
             path = plot_dir / "04_unsorted_vs_target_gate.png"
+            fig.savefig(path, dpi=180)
+            plt.close(fig)
+            written.append(path)
+
+        if len(reference_rows) == 1:
+            reference = reference_rows.iloc[0]
+            fig, ax = plt.subplots(figsize=(6.2, 4.5))
+            ax.hist(passing["expected_bin_score"], bins=40, color="#4C78A8", alpha=0.8)
+            ax.axvline(
+                reference["expected_bin_score"],
+                color="#D62728",
+                linewidth=2.2,
+                linestyle="--",
+                label=(
+                    f"{reference.get('reference_display_label', reference[id_column])}: "
+                    f"{reference['expected_bin_score']:.3f} "
+                    f"(rank {reference['estimated_rank']:.0f})"
+                ),
+            )
+            ax.set_xlabel("Expected bin score")
+            ax.set_ylabel("Coverage-passing UTRs")
+            ax.set_title("Reference position in the fluorescence-score distribution")
+            ax.legend(frameon=False)
+            fig.tight_layout()
+            path = plot_dir / "05_reference_score_position.png"
             fig.savefig(path, dpi=180)
             plt.close(fig)
             written.append(path)
@@ -571,6 +784,18 @@ def write_report(
         f'alt="{html.escape(path.stem)}"><figcaption>{html.escape(path.stem)}</figcaption></figure>'
         for path in plots
     )
+    if summary.get("reference_comparison_enabled"):
+        reference_html = (
+            '<div class="box"><b>Reference 위치</b>: '
+            f"{html.escape(str(summary.get('reference_display_label') or summary['reference_variant_id']))}; "
+            f"score {float(summary['reference_expected_bin_score']):.3f}; "
+            f"rank {float(summary['reference_estimated_rank']):.0f}; "
+            f"percentile {float(summary['reference_expression_percentile']):.2f}. "
+            f"Reference보다 score가 높은 UTR은 "
+            f"{int(summary['variants_with_score_above_reference']):,}개입니다.</div>"
+        )
+    else:
+        reference_html = ""
     report.write_text(
         f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <title>7-sample 5' UTR Sort-seq report</title><style>
@@ -584,6 +809,7 @@ figure{{margin:20px 0}} code{{background:#f2f2f2;padding:2px 4px}}
 그 UTR 세포가 bin1–6에 어떻게 분포하는지 복원했습니다. bin1은 최고 mCherry, bin6은 최저 mCherry-positive입니다.</div>
 <p>Reference UTR: {summary['reference_variants']:,}; coverage 통과: {summary['variants_passing_coverage']:,};
 high-candidate heuristic 통과: {summary['high_candidate_count']:,}</p>
+{reference_html}
 <h2>결과를 읽는 순서</h2><ol>
 <li><code>pass_coverage</code>가 TRUE인 UTR만 봅니다.</li>
 <li><code>expected_bin_score</code>와 <code>expression_tier</code>로 전체적인 high/mid/low 위치를 봅니다.</li>
@@ -605,6 +831,22 @@ def main() -> int:
     args = parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
     variants = load_variants(args.variants, args.id_column)
+    reference_variant_id = resolve_reference_variant_id(
+        variants,
+        args.id_column,
+        args.reference_variant_id,
+    )
+    reference_label = reference_display_label(
+        variants,
+        args.id_column,
+        reference_variant_id,
+    )
+    if args.reference_variant_id.lower() == "auto" and reference_variant_id is None:
+        print(
+            "WARNING: no original/orginal reference variant was found; "
+            "reference comparison is disabled",
+            file=sys.stderr,
+        )
     samples = load_samples(args.samples)
     counts, sample_qc = load_count_matrix(samples, variants, args.id_column, args.samples)
     result, essential, summary = analyze(
@@ -616,6 +858,8 @@ def main() -> int:
         args.min_unsorted_count,
         args.min_total_bin_count,
         args.overall_gate_fraction,
+        reference_variant_id,
+        reference_label,
     )
     plots = make_plots(args.outdir, sample_qc, result, args.id_column, args.top_n)
     report = write_report(args.outdir, sample_qc, essential, summary, plots, args.id_column)
@@ -625,6 +869,29 @@ def main() -> int:
     essential[essential["high_candidate_flag"]].to_csv(
         args.outdir / "high_candidates.tsv", sep="\t", index=False
     )
+    if reference_variant_id is not None:
+        comparison_columns = [
+            args.id_column,
+            "pass_coverage",
+            "unsorted_count",
+            "total_6bin_count",
+            "expected_bin_score",
+            "delta_score_vs_reference",
+            "high15_probability",
+            "delta_high15_probability_vs_reference",
+            "high15_fold_vs_reference",
+            "estimated_rank",
+            "expression_percentile",
+            "expression_tier",
+            "high_candidate_flag",
+            "is_reference_variant",
+            "reference_display_label",
+        ]
+        result.loc[:, comparison_columns].sort_values(
+            ["pass_coverage", "delta_score_vs_reference"],
+            ascending=[False, False],
+            na_position="last",
+        ).to_csv(args.outdir / "reference_comparison.tsv", sep="\t", index=False)
     sample_qc.to_csv(args.outdir / "sample_qc.tsv", sep="\t", index=False)
     pd.DataFrame([summary]).to_csv(args.outdir / "run_summary.tsv", sep="\t", index=False)
     (args.outdir / "run_summary.json").write_text(

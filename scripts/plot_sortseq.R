@@ -59,6 +59,18 @@ passing <- results[results$pass_coverage & is.finite(results$expected_bin_score)
 if (nrow(passing) == 0) {
   stop("No UTR passed the coverage filter.")
 }
+if ("is_reference_variant" %in% colnames(passing)) {
+  passing$is_reference_variant <- tolower(as.character(passing$is_reference_variant)) %in% c("true", "t", "1")
+} else {
+  passing$is_reference_variant <- tolower(trimws(passing$variant_id)) %in% c("original", "orginal")
+}
+if (!("reference_display_label" %in% colnames(passing))) {
+  passing$reference_display_label <- passing$variant_id
+}
+reference <- passing[passing$is_reference_variant, , drop = FALSE]
+if (nrow(reference) > 1) {
+  stop("More than one reference variant was identified: ", paste(reference$variant_id, collapse = ", "))
+}
 
 colors <- c(
   orange = "#D55E00", gold = "#E69F00", sky = "#56B4E9",
@@ -167,6 +179,7 @@ tier_order <- c(
   "middle_50pct", "lower_25pct", "bottom_10pct"
 )
 passing$expression_tier <- factor(passing$expression_tier, levels = tier_order)
+reference <- passing[passing$is_reference_variant, , drop = FALSE]
 p_score <- ggplot2::ggplot(
   passing,
   ggplot2::aes(x = expected_bin_score, y = high15_enrichment, color = expression_tier)
@@ -186,26 +199,55 @@ p_score <- ggplot2::ggplot(
     color = "Rank tier"
   ) +
   theme_sortseq()
+if (nrow(reference) == 1) {
+  p_score <- p_score +
+    ggplot2::geom_point(
+      data = reference,
+      ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
+      inherit.aes = FALSE, shape = 8, size = 5.2, stroke = 1.2,
+      color = "#B2182B"
+    ) +
+    ggplot2::geom_text(
+      data = reference,
+      ggplot2::aes(
+        x = expected_bin_score, y = high15_enrichment,
+        label = paste0(reference_display_label, " [reference]")
+      ),
+      inherit.aes = FALSE, nudge_x = 0.06, nudge_y = 0.08,
+      hjust = 0, color = "#B2182B", fontface = "bold", size = 3.8
+    )
+}
 save_png("03_score_vs_high15_enrichment.png", p_score)
 plots[[length(plots) + 1]] <- p_score
 
 # 04: top-UTR bin probability heatmap
 top_n <- min(50, nrow(passing))
 top <- passing[order(passing$estimated_rank), , drop = FALSE][seq_len(top_n), , drop = FALSE]
+reference_added <- FALSE
+if (nrow(reference) == 1 && !(reference$variant_id[[1]] %in% top$variant_id)) {
+  top <- rbind(top, reference)
+  reference_added <- TRUE
+}
+top$display_id <- ifelse(
+  top$is_reference_variant,
+  paste0(top$reference_display_label, " [reference]"),
+  top$variant_id
+)
 probability_columns <- paste0("bin", 1:6, "_probability")
 heat <- do.call(
   rbind,
   lapply(seq_len(nrow(top)), function(row_number) {
     data.frame(
-      variant_id = top$variant_id[[row_number]],
+      variant_id = top$display_id[[row_number]],
       bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
       probability = as.numeric(top[row_number, probability_columns]),
       rank = top$estimated_rank[[row_number]],
+      is_reference = top$is_reference_variant[[row_number]],
       stringsAsFactors = FALSE
     )
   })
 )
-heat$variant_id <- factor(heat$variant_id, levels = rev(top$variant_id))
+heat$variant_id <- factor(heat$variant_id, levels = rev(top$display_id))
 p_heat <- ggplot2::ggplot(
   heat,
   ggplot2::aes(x = bin, y = variant_id, fill = probability)
@@ -215,12 +257,22 @@ p_heat <- ggplot2::ggplot(
     colors = viridisLite::viridis(256, option = "B"), labels = scales::percent
   ) +
   ggplot2::labs(
-    title = sprintf("Top %d UTR fluorescence-bin distributions", top_n),
+    title = if (reference_added) {
+      sprintf("Top %d UTR fluorescence-bin distributions + reference", top_n)
+    } else {
+      sprintf("Top %d UTR fluorescence-bin distributions", top_n)
+    },
     subtitle = "Cell-fraction and sequencing-depth corrected; bin1 = highest mCherry",
     x = "FACS bin", y = "UTR", fill = "Estimated\ncell fraction"
   ) +
   theme_sortseq() +
   ggplot2::theme(panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_text(size = 7.5))
+if (any(heat$is_reference)) {
+  p_heat <- p_heat + ggplot2::geom_tile(
+    data = heat[heat$is_reference, , drop = FALSE],
+    fill = NA, color = "#B2182B", linewidth = 0.9
+  )
+}
 save_png("04_top_utr_bin_heatmap.png", p_heat, 10.2, max(7.2, top_n * 0.19))
 plots[[length(plots) + 1]] <- p_heat
 
@@ -266,8 +318,60 @@ p_gate <- ggplot2::ggplot(
     y = "Reconstructed UTR frequency in target gate"
   ) +
   theme_sortseq()
+reference_composition <- composition[composition$is_reference_variant, , drop = FALSE]
+if (nrow(reference_composition) == 1) {
+  p_gate <- p_gate +
+    ggplot2::geom_point(
+      data = reference_composition,
+      ggplot2::aes(x = unsorted_frequency, y = reconstructed_gate_frequency),
+      inherit.aes = FALSE, shape = 8, size = 5.2, stroke = 1.2,
+      color = "#B2182B"
+    ) +
+    ggplot2::geom_text(
+      data = reference_composition,
+      ggplot2::aes(
+        x = unsorted_frequency, y = reconstructed_gate_frequency,
+        label = paste0(reference_display_label, " [reference]")
+      ),
+      inherit.aes = FALSE,
+      hjust = -0.08, vjust = -0.5,
+      color = "#B2182B", fontface = "bold", size = 3.8
+    )
+}
 save_png("06_unsorted_vs_target_gate.png", p_gate)
 plots[[length(plots) + 1]] <- p_gate
+
+# 07: reference position in the score distribution
+if (nrow(reference) == 1) {
+  p_reference <- ggplot2::ggplot(
+    passing,
+    ggplot2::aes(x = expected_bin_score)
+  ) +
+    ggplot2::geom_histogram(bins = 45, fill = colors[["sky"]], color = "white") +
+    ggplot2::geom_vline(
+      xintercept = reference$expected_bin_score[[1]],
+      color = "#B2182B", linewidth = 1.2, linetype = "dashed"
+    ) +
+    ggplot2::annotate(
+      "label",
+      x = reference$expected_bin_score[[1]], y = Inf,
+      label = sprintf(
+        "%s [reference]\nscore %.3f | rank %.0f | percentile %.2f",
+        reference$reference_display_label[[1]], reference$expected_bin_score[[1]],
+        reference$estimated_rank[[1]], reference$expression_percentile[[1]]
+      ),
+      vjust = 1.25, hjust = ifelse(reference$expected_bin_score[[1]] > median(passing$expected_bin_score), 1.05, -0.05),
+      color = "#B2182B", fill = "white", fontface = "bold", size = 3.8
+    ) +
+    ggplot2::labs(
+      title = "Reference position in the fluorescence-score distribution",
+      subtitle = "The dashed red line marks the original/orginal control UTR",
+      x = "Expected bin score", y = "Coverage-passing UTRs"
+    ) +
+    theme_sortseq()
+  save_png("07_reference_score_position.png", p_reference)
+  plots[[length(plots) + 1]] <- p_reference
+}
 
 # Optional NGS_LibraryQC mapping summary used for tabular audit.
 library_metrics_path <- file.path(libraryqc_dir, "combined", "all_sample_metrics.csv")
@@ -294,6 +398,30 @@ statistics <- data.frame(
   ),
   stringsAsFactors = FALSE
 )
+if (nrow(reference) == 1) {
+  reference_statistics <- data.frame(
+    metric = c(
+      "reference_variant_id", "reference_expected_bin_score",
+      "reference_high15_probability", "reference_high15_enrichment",
+      "reference_estimated_rank", "reference_expression_percentile",
+      "variants_with_score_above_reference",
+      "variants_with_score_and_high15_above_reference"
+    ),
+    value = c(
+      reference$variant_id[[1]], reference$expected_bin_score[[1]],
+      reference$high15_probability[[1]], reference$high15_enrichment[[1]],
+      reference$estimated_rank[[1]], reference$expression_percentile[[1]],
+      sum(passing$expected_bin_score > reference$expected_bin_score[[1]], na.rm = TRUE),
+      sum(
+        passing$expected_bin_score > reference$expected_bin_score[[1]] &
+          passing$high15_probability > reference$high15_probability[[1]],
+        na.rm = TRUE
+      )
+    ),
+    stringsAsFactors = FALSE
+  )
+  statistics <- rbind(statistics, reference_statistics)
+}
 write.csv(statistics, file.path(output_dir, "plot_statistics.csv"), quote = FALSE, row.names = FALSE)
 
 grDevices::pdf(

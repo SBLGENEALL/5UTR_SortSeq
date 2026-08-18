@@ -10,6 +10,10 @@
 > **서버 환경:** 분석 서버는 오프라인 Linux입니다. GitHub ZIP은 인터넷 가능한
 > PC에서 받아 서버로 옮기고, 서버에서는 기존 pDNA QC Python/R 환경과
 > `NGS_LibraryQC`를 재사용합니다.
+>
+> **데이터 보안:** 사내 FASTQ, count table, TSV/CSV 및 결과 파일은 외부로 업로드하거나
+> 반출하지 않습니다. 코드만 GitHub ZIP으로 반입하고 모든 계산·QC·그림 생성은 사내
+> 오프라인 Linux 서버 안에서 수행합니다.
 
 실행 중 진행상황은 별도 터미널에서 다음 명령으로 확인할 수 있습니다.
 
@@ -110,8 +114,21 @@ results/library_qc/combined/variant_count_matrix.csv
 results/sortseq/utr_results_easy.tsv
 results/sortseq/utr_results_full.tsv
 results/sortseq/high_candidates.tsv
+results/sortseq/reference_comparison.tsv
 results/sortseq/figures/sortseq_qc_figures.pdf
 ```
+
+`original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 score 차이와
+high15 fold가 표에 추가되고, scatter/heatmap/score-distribution/unsorted-gate 그림에는
+빨간 별 또는 선으로 표시됩니다. Rescue와 LibraryQC를 유지하고 reference-aware 결과만
+다시 만들려면 새 코드에서 다음을 실행합니다.
+
+```bash
+bash run_pipeline.sh reanalyze
+```
+
+기존 `results/sortseq`은 `archive/`로 이동되며 raw FASTQ, rescue, LibraryQC 결과는
+수정되지 않습니다.
 
 전체 흐름은 [docs/PIPELINE_WORKFLOW_KO.md](docs/PIPELINE_WORKFLOW_KO.md),
 서버 설정은 [docs/SERVER_GUIDE_KO.md](docs/SERVER_GUIDE_KO.md), 결과 해석은

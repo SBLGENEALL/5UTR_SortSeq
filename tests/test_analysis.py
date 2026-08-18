@@ -111,6 +111,47 @@ class EasyPipelineTests(unittest.TestCase):
         neutral = result.set_index("variant_id").loc["neutral"]
         self.assertAlmostEqual(neutral["gate_entry_probability_raw"], 0.90, delta=0.001)
 
+    def test_orginal_alias_adds_reference_relative_metrics(self):
+        variants, samples, counts = self.make_inputs()
+        variants.loc[variants["variant_id"].eq("neutral"), "variant_id"] = "orginal"
+        counts = counts.rename(index={"neutral": "orginal"})
+        reference_id = MODULE.resolve_reference_variant_id(variants, "variant_id", "auto")
+        self.assertEqual(reference_id, "orginal")
+        result, essential, summary = MODULE.analyze(
+            variants,
+            samples,
+            counts,
+            "variant_id",
+            0.5,
+            0,
+            0,
+            0.90,
+            reference_id,
+        )
+        indexed = result.set_index("variant_id")
+        self.assertTrue(indexed.loc["orginal", "is_reference_variant"])
+        self.assertAlmostEqual(indexed.loc["orginal", "delta_score_vs_reference"], 0.0)
+        self.assertGreater(indexed.loc["high", "delta_score_vs_reference"], 0)
+        self.assertLess(indexed.loc["low", "delta_score_vs_reference"], 0)
+        self.assertGreater(indexed.loc["high", "high15_fold_vs_reference"], 1)
+        self.assertEqual(summary["reference_variant_id"], "orginal")
+        self.assertEqual(summary["variants_with_score_above_reference"], 1)
+        self.assertIn("delta_score_vs_reference", essential.columns)
+
+    def test_reference_alias_can_be_found_in_collapsed_original_ids(self):
+        variants = pd.DataFrame(
+            {
+                "variant_id": ["sequence_key_1", "sequence_key_2"],
+                "original_variant_ids": ["control|orginal", "other"],
+            }
+        )
+        reference_id = MODULE.resolve_reference_variant_id(variants, "variant_id", "auto")
+        self.assertEqual(reference_id, "sequence_key_1")
+        self.assertEqual(
+            MODULE.reference_display_label(variants, "variant_id", reference_id),
+            "orginal",
+        )
+
     def test_collected_cells_override_nominal_population_fractions(self):
         _, samples, _ = self.make_inputs()
         samples["count_file"] = "unused.tsv"

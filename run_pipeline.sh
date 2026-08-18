@@ -16,11 +16,12 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh status
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh resources
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh reanalyze
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh full [--replace]
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|plot|status|resources|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|plot|status|resources|reanalyze|full)$ ]]; then
   usage
   exit 2
 fi
@@ -58,6 +59,7 @@ NESTED_WORKER_THREADS="${NESTED_WORKER_THREADS:-1}"
 OVERALL_GATE_FRACTION="${OVERALL_GATE_FRACTION:-0.90}"
 MIN_UNSORTED_COUNT="${MIN_UNSORTED_COUNT:-50}"
 MIN_TOTAL_BIN_COUNT="${MIN_TOTAL_BIN_COUNT:-100}"
+REFERENCE_VARIANT_ID="${REFERENCE_VARIANT_ID:-auto}"
 
 # Multiprocessing stages own the parallelism. Prevent BLAS/OpenMP libraries
 # loaded by individual workers from multiplying 128 workers by extra threads.
@@ -361,6 +363,17 @@ archive_existing_outputs() {
   done
 }
 
+archive_sortseq_output() {
+  local archive_root="${PROJECT_DIR:-$(dirname "${RESULTS_DIR}")}/archive"
+  local timestamp
+  timestamp="$(date +%Y%m%d_%H%M%S)"
+  if [[ -e "${RESULTS_DIR}/sortseq" ]]; then
+    mkdir -p "${archive_root}"
+    mv -- "${RESULTS_DIR}/sortseq" "${archive_root}/sortseq_before_reanalyze_${timestamp}"
+    echo "Archived prior Sort-seq result: ${archive_root}/sortseq_before_reanalyze_${timestamp}"
+  fi
+}
+
 run_preflight() {
   require_rescue_inputs
   stage_begin "1/5" "Preflight: FASTQ and dual-index inspection"
@@ -445,7 +458,8 @@ run_analyze() {
     --outdir "${RESULTS_DIR}/sortseq" \
     --overall-gate-fraction "${OVERALL_GATE_FRACTION}" \
     --min-unsorted-count "${MIN_UNSORTED_COUNT}" \
-    --min-total-bin-count "${MIN_TOTAL_BIN_COUNT}"
+    --min-total-bin-count "${MIN_TOTAL_BIN_COUNT}" \
+    --reference-variant-id "${REFERENCE_VARIANT_ID}"
   stage_complete
 }
 
@@ -473,6 +487,12 @@ case "${MODE}" in
   plot) run_plot ;;
   status) show_status ;;
   resources) show_resources ;;
+  reanalyze)
+    archive_sortseq_output
+    run_analyze
+    run_plot
+    echo "Reference-aware analysis completed: ${RESULTS_DIR}/sortseq"
+    ;;
   full)
     run_preflight
     run_rescue

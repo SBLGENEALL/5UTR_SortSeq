@@ -35,6 +35,31 @@ UTR별 bin probability     p_ib = a_ib / sum_b(a_ib)
 - 이상한 gate depletion이나 한-bin-only PCR jackpot이 없음
 - 1-mismatch와 2-mismatch rescue 설정에서 tier가 안정적
 
+## Original/reference 대비 우위
+
+`REFERENCE_VARIANT_ID=auto`는 variant ID가 `original` 또는 `orginal`인 control을
+대소문자와 관계없이 자동 탐지합니다. 다음 값은 `reference_comparison.tsv`와 주 결과표에
+기록됩니다.
+
+| 열 | 의미 |
+|---|---|
+| `delta_score_vs_reference` | UTR score − original score; 양수이면 high 쪽으로 이동 |
+| `delta_high15_probability_vs_reference` | UTR의 bin1+2 probability − original 값 |
+| `high15_fold_vs_reference` | UTR high15 probability / original high15 probability |
+| `score_above_reference` | coverage 통과 및 score가 original보다 높음 |
+| `score_and_high15_above_reference` | score와 high15 probability가 모두 original보다 높음 |
+
+Score는 1–6 사이의 ordinal weighted average이므로 fold가 아니라 차이로 해석합니다.
+High15 probability는 비율이므로 original 대비 fold로 비교할 수 있습니다. 그림에서는
+original을 빨간 별, 빨간 테두리 또는 빨간 점선으로 표시합니다. Top50 밖에 있더라도
+heatmap에는 비교 행으로 추가합니다.
+
+기존 rescue/LibraryQC를 다시 계산하지 않고 reference 비교와 그림만 갱신하려면:
+
+```bash
+bash run_pipeline.sh reanalyze
+```
+
 ## unsorted의 역할
 
 현재 unsorted는 whole population이고 6 bins는 mCherry+/GFP- gate 내부입니다. 따라서 unsorted는 주 fluorescence score의 분모가 아닙니다. plasmid/unsorted representation과 target-gate 진입의 보조 QC로 사용합니다.

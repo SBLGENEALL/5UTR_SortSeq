@@ -9,6 +9,8 @@
 - GitHub ZIP은 인터넷 가능한 PC에서 받아 서버로 옮깁니다.
 - 서버에서는 기존 pDNA QC Python/R 환경과 기존 `NGS_LibraryQC`를 재사용합니다.
 - 서버에서 `curl`, `wget`, `git clone/pull`, 온라인 `pip`/R 설치를 하지 않습니다.
+- 사내 raw/result 파일을 외부 서비스나 채팅에 업로드하지 않습니다. 문제 확인과 추가
+  계산은 서버 내부 명령 및 로컬 HTML/TSV/PNG/PDF 산출물로 수행합니다.
 - 원본 `raw_data`는 수정하지 않습니다.
 - `bash run_pipeline.sh full`보다 아래 5단계를 하나씩 실행하고 결과를 확인하는
   방식을 권장합니다.
