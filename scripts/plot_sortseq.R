@@ -387,6 +387,7 @@ if (nrow(reference) == 1) {
 # high_confidence_candidates.tsv was created with the documented filter.
 strict_candidate_path <- file.path(sortseq_dir, "high_confidence_candidates.tsv")
 strict_candidate_ids <- character(0)
+strict_candidates_recomputed <- FALSE
 if (file.exists(strict_candidate_path)) {
   strict_candidate_file <- read_tsv(strict_candidate_path)
   if ("variant_id" %in% colnames(strict_candidate_file)) {
@@ -403,10 +404,10 @@ if (file.exists(strict_candidate_path)) {
 # filter directly from utr_results_full.tsv so the R-only plot step is enough.
 if (length(strict_candidate_ids) == 0) {
   fallback_unsorted_cutoff <- max(
-    1000, round(0.10 * median(results$unsorted_count, na.rm = TRUE))
+    100, round(0.10 * median(results$unsorted_count, na.rm = TRUE))
   )
   fallback_total_cutoff <- max(
-    5000, round(0.10 * median(results$total_6bin_count, na.rm = TRUE))
+    500, round(0.10 * median(results$total_6bin_count, na.rm = TRUE))
   )
   fallback_high_bin_count <- results$bin1_count + results$bin2_count
   fallback_max_probability <- apply(
@@ -416,7 +417,7 @@ if (length(strict_candidate_ids) == 0) {
   fallback_strict_pass <-
     results$unsorted_count >= fallback_unsorted_cutoff &
     results$total_6bin_count >= fallback_total_cutoff &
-    fallback_high_bin_count >= 200 &
+    fallback_high_bin_count >= 50 &
     results$detected_in_n_bins >= 3
   fallback_jackpot <-
     fallback_max_probability >= 0.85 & results$detected_in_n_bins <= 2
@@ -430,8 +431,9 @@ if (length(strict_candidate_ids) == 0) {
       fallback_strict_pass & fallback_high_candidate & !fallback_jackpot
     ]
   )
+  strict_candidates_recomputed <- TRUE
   message(
-    "Strict candidates recomputed from utr_results_full.tsv: ",
+    "Read-supported exploratory candidates recomputed from utr_results_full.tsv: ",
     length(strict_candidate_ids)
   )
 }
@@ -448,7 +450,7 @@ if (length(strict_candidate_ids) > 0) {
     grDevices::dev.off()
   }
 
-  if ("strict_coverage_pass" %in% colnames(results)) {
+  if (!strict_candidates_recomputed && "strict_coverage_pass" %in% colnames(results)) {
     results$strict_coverage_pass <- as_bool(results$strict_coverage_pass)
     strict_passing <- results[
       results$strict_coverage_pass & is.finite(results$expected_bin_score),
@@ -457,19 +459,28 @@ if (length(strict_candidate_ids) > 0) {
     strict_unsorted_cutoff <- suppressWarnings(max(results$strict_unsorted_cutoff, na.rm = TRUE))
     strict_total_cutoff <- suppressWarnings(max(results$strict_total_6bin_cutoff, na.rm = TRUE))
   } else {
-    strict_unsorted_cutoff <- max(1000, round(0.10 * median(results$unsorted_count, na.rm = TRUE)))
-    strict_total_cutoff <- max(5000, round(0.10 * median(results$total_6bin_count, na.rm = TRUE)))
+    strict_unsorted_cutoff <- max(100, round(0.10 * median(results$unsorted_count, na.rm = TRUE)))
+    strict_total_cutoff <- max(500, round(0.10 * median(results$total_6bin_count, na.rm = TRUE)))
     high_bin_raw_count <- results$bin1_count + results$bin2_count
     strict_mask <-
       results$unsorted_count >= strict_unsorted_cutoff &
       results$total_6bin_count >= strict_total_cutoff &
-      high_bin_raw_count >= 200 &
+      high_bin_raw_count >= 50 &
       results$detected_in_n_bins >= 3
     strict_passing <- results[
       strict_mask & is.finite(results$expected_bin_score),
       , drop = FALSE
     ]
   }
+  strong_mask <-
+    results$unsorted_count >= 200 &
+    results$total_6bin_count >= 1000 &
+    (results$bin1_count + results$bin2_count) >= 100 &
+    results$detected_in_n_bins >= 3
+  strong_passing <- results[
+    strong_mask & is.finite(results$expected_bin_score),
+    , drop = FALSE
+  ]
   strict_candidates <- results[
     results$variant_id %in% strict_candidate_ids & is.finite(results$expected_bin_score),
     , drop = FALSE
@@ -495,18 +506,24 @@ if (length(strict_candidate_ids) > 0) {
       color = colors[["blue"]], alpha = 0.52, size = 1.55
     ) +
     ggplot2::geom_point(
+      data = strong_passing,
+      ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
+      color = colors[["purple"]], alpha = 0.72, size = 1.85
+    ) +
+    ggplot2::geom_point(
       data = strict_candidates,
       ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
       color = colors[["orange"]], alpha = 0.90, size = 2.5
     ) +
     ggplot2::labs(
-      title = "Strict-filtered high-confidence 5'UTR candidates",
+      title = "Read-supported exploratory 5'UTR candidates",
       subtitle = sprintf(
-        "Gray = permissive coverage; blue = strict coverage (%s UTRs); orange = final candidates (%s)",
-        scales::comma(nrow(strict_passing)), scales::comma(nrow(strict_candidates))
+        "Gray = permissive; blue = supported (%s); purple = strong support (%s); orange = supported high candidates (%s)",
+        scales::comma(nrow(strict_passing)), scales::comma(nrow(strong_passing)),
+        scales::comma(nrow(strict_candidates))
       ),
       caption = sprintf(
-        "Strict raw-count cutoffs: unsorted >= %s; total six bins >= %s; bin1+2 >= 200; detected bins >= 3",
+        "Supported cutoffs: unsorted >= %s; total six bins >= %s; bin1+2 >= 50; detected bins >= 3. No strong-support high candidate was assumed.",
         scales::comma(strict_unsorted_cutoff), scales::comma(strict_total_cutoff)
       ),
       x = "Expected bin score (6 = high, 1 = low)",
@@ -568,7 +585,7 @@ if (length(strict_candidate_ids) > 0) {
       colors = viridisLite::viridis(256, option = "B"), labels = scales::percent
     ) +
     ggplot2::labs(
-      title = sprintf("Top %d high-confidence UTR bin probabilities", top_strict_n),
+      title = sprintf("Top %d read-supported high-score UTR bin probabilities", top_strict_n),
       subtitle = if (strict_reference_added) {
         "Strict candidates plus reference; absolute estimated cell fraction"
       } else {
@@ -618,7 +635,7 @@ if (length(strict_candidate_ids) > 0) {
       limits = c(-3, 3), oob = scales::squish
     ) +
     ggplot2::labs(
-      title = sprintf("Top %d high-confidence UTR bin enrichment", top_strict_n),
+      title = sprintf("Top %d read-supported high-score UTR bin enrichment", top_strict_n),
       subtitle = "log2(probability / sorter-bin fraction); red = enriched, blue = depleted",
       x = "FACS bin", y = "UTR", fill = "log2\nbin enrichment"
     ) +
@@ -651,8 +668,8 @@ if (length(strict_candidate_ids) > 0) {
     ggplot2::scale_x_log10(labels = scales::label_scientific()) +
     ggplot2::scale_y_log10(labels = scales::label_scientific()) +
     ggplot2::labs(
-      title = "High-confidence candidates in the target gate",
-      subtitle = "Gray = all coverage-passing UTRs; orange = strict high-confidence candidates",
+      title = "Read-supported exploratory candidates in the target gate",
+      subtitle = "Gray = all coverage-passing UTRs; orange = supported high-score candidates",
       x = "UTR frequency in whole unsorted",
       y = "Reconstructed UTR frequency in target gate"
     ) +
@@ -693,11 +710,12 @@ if (length(strict_candidate_ids) > 0) {
   strict_statistics <- data.frame(
     metric = c(
       "strict_unsorted_cutoff", "strict_total_6bin_cutoff",
-      "strict_coverage_passing_utr", "high_confidence_candidate_count"
+      "supported_coverage_passing_utr", "strong_coverage_passing_utr",
+      "supported_high_candidate_count"
     ),
     value = c(
       strict_unsorted_cutoff, strict_total_cutoff,
-      nrow(strict_passing), nrow(strict_candidates)
+      nrow(strict_passing), nrow(strong_passing), nrow(strict_candidates)
     ),
     stringsAsFactors = FALSE
   )

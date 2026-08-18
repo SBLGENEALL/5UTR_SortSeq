@@ -153,6 +153,12 @@ bin1 + bin2 raw count >= 200
 analyze를 다시 실행하지 않고 plot만 실행해도 됩니다. 파일이 없거나 비어 있어도
 v0.1.6부터는 `utr_results_full.tsv`에서 같은 strict 기준을 R이 자동 재계산합니다.
 
+관측된 count 중앙값이 고정 strict floor보다 훨씬 낮아 strict high 후보가 0개이면,
+v0.1.7의 R 그림은 `unsorted >= 100`, `total six bins >= 500`, `bin1+2 >= 50`,
+`detected bins >= 3`을 만족하는 UTR를 **read-supported exploratory** 후보로 표시합니다.
+`unsorted >= 200`, `total >= 1,000`, `bin1+2 >= 100`인 strong-support UTR는 별도
+색으로 표시하며, strong-support high 후보가 0개라는 사실도 그대로 보존합니다.
+
 특히 두 heatmap을 구분해서 봅니다.
 
 - `09_strict_top_utr_bin_probability_heatmap.png`: UTR별 절대 bin probability
