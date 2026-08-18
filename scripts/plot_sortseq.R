@@ -990,6 +990,309 @@ if (all(top15_required %in% colnames(results))) {
   }
 }
 
+# High+low-tail distribution QC. The Python bimodality-qc command must be run
+# first; these plots test whether polarization is concentrated among low-count
+# variants and therefore likely to be a sampling artifact.
+bimodality_dir <- file.path(sortseq_dir, "bimodality_qc")
+bimodality_all_path <- file.path(bimodality_dir, "bimodality_all_variants.csv")
+bimodality_by_count_path <- file.path(bimodality_dir, "bimodality_by_read_count.csv")
+bimodality_summary_path <- file.path(bimodality_dir, "bimodality_summary.csv")
+if (file.exists(bimodality_all_path) && file.exists(bimodality_by_count_path)) {
+  bimodality_output_dir <- file.path(output_dir, "bimodality")
+  dir.create(bimodality_output_dir, recursive = TRUE, showWarnings = FALSE)
+  save_bimodality_png <- function(filename, plot, width = 11.8, height = 6.6) {
+    ragg::agg_png(
+      filename = file.path(bimodality_output_dir, filename),
+      width = width, height = height, units = "in", res = 320,
+      background = "white"
+    )
+    print(plot)
+    grDevices::dev.off()
+  }
+
+  bimodality <- read.csv(
+    bimodality_all_path, stringsAsFactors = FALSE, check.names = FALSE
+  )
+  bimodality_by_count <- read.csv(
+    bimodality_by_count_path, stringsAsFactors = FALSE, check.names = FALSE
+  )
+  bimodality$variant_id <- as.character(bimodality$variant_id)
+  for (column in c(
+    "total_6bin_count", "high_bin_raw_count",
+    "high_tail_probability", "middle_probability", "low_tail_probability",
+    "extreme_polarization_index_0to1", "middle_valley_ratio",
+    paste0("bin", 1:6, "_probability")
+  )) {
+    if (column %in% colnames(bimodality)) {
+      bimodality[[column]] <- suppressWarnings(as.numeric(bimodality[[column]]))
+    }
+  }
+  for (column in c(
+    "bimodality_read_support_pass", "extreme_polarized_shape_flag",
+    "both_tail_raw_support_pass", "clear_bimodal_flag",
+    "utra_like_strong_polarization_flag",
+    "is_reference_variant"
+  )) {
+    if (column %in% colnames(bimodality)) {
+      bimodality[[column]] <- as_bool(bimodality[[column]])
+    }
+  }
+  if (!("is_reference_variant" %in% colnames(bimodality))) {
+    bimodality$is_reference_variant <-
+      tolower(trimws(bimodality$variant_id)) %in% c("original", "orginal")
+  }
+
+  bimodality_supported <- bimodality[
+    bimodality$bimodality_read_support_pass &
+      is.finite(bimodality$total_6bin_count) &
+      bimodality$total_6bin_count > 0 &
+      is.finite(bimodality$extreme_polarization_index_0to1),
+    , drop = FALSE
+  ]
+  bimodality_clear <- bimodality_supported[
+    bimodality_supported$clear_bimodal_flag, , drop = FALSE
+  ]
+  bimodality_plots <- list()
+
+  rho_label <- "Spearman rho unavailable"
+  if (file.exists(bimodality_summary_path)) {
+    bimodality_summary <- read.csv(
+      bimodality_summary_path, stringsAsFactors = FALSE, check.names = FALSE
+    )
+    rho <- suppressWarnings(as.numeric(
+      bimodality_summary$spearman_log10_total_count_vs_polarization_index[[1]]
+    ))
+    if (is.finite(rho)) {
+      rho_label <- sprintf("Spearman rho = %.3f", rho)
+    }
+  }
+
+  if (nrow(bimodality_supported) > 0) {
+    p_bimodality_count <- ggplot2::ggplot(
+      bimodality_supported,
+      ggplot2::aes(
+        x = total_6bin_count,
+        y = extreme_polarization_index_0to1
+      )
+    ) +
+      ggplot2::geom_point(color = "#C7CED3", alpha = 0.52, size = 1.5) +
+      ggplot2::geom_point(
+        data = bimodality_clear,
+        color = colors[["orange"]], alpha = 0.88, size = 2.2
+      ) +
+      ggplot2::scale_x_log10(labels = scales::comma) +
+      ggplot2::scale_y_continuous(
+        limits = c(0, 1), labels = scales::percent,
+        expand = ggplot2::expansion(mult = c(0.01, 0.04))
+      ) +
+      ggplot2::labs(
+        title = "Extreme-tail polarization versus read support",
+        subtitle = sprintf(
+          "Gray = read-supported UTRs; orange = clear high+low-tail shape (%s)",
+          scales::comma(nrow(bimodality_clear))
+        ),
+        caption = paste0(
+          rho_label,
+          ". A low-count cluster indicates possible sampling/jackpot inflation."
+        ),
+        x = "Total raw count across six bins (log scale)",
+        y = "Extreme polarization index"
+      ) +
+      theme_sortseq()
+    save_bimodality_png(
+      "17_polarization_vs_read_count.png", p_bimodality_count
+    )
+    bimodality_plots[["17"]] <- p_bimodality_count
+
+    p_high_low_tail <- ggplot2::ggplot(
+      bimodality_supported,
+      ggplot2::aes(x = high_tail_probability, y = low_tail_probability)
+    ) +
+      ggplot2::geom_vline(
+        xintercept = 0.20, linetype = "dashed", color = colors[["muted"]]
+      ) +
+      ggplot2::geom_hline(
+        yintercept = 0.20, linetype = "dashed", color = colors[["muted"]]
+      ) +
+      ggplot2::geom_point(color = "#C7CED3", alpha = 0.52, size = 1.5) +
+      ggplot2::geom_point(
+        data = bimodality_clear,
+        color = colors[["orange"]], alpha = 0.88, size = 2.2
+      ) +
+      ggplot2::coord_equal(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+      ggplot2::scale_x_continuous(labels = scales::percent) +
+      ggplot2::scale_y_continuous(labels = scales::percent) +
+      ggplot2::labs(
+        title = "High-tail and low-tail probability",
+        subtitle = "Orange requires both tails, a depleted middle, and sufficient raw-read support",
+        caption = "A point high on only one axis is shifted, not bimodality-like.",
+        x = "High tail probability (bin1 + bin2)",
+        y = "Low tail probability (bin5 + bin6)"
+      ) +
+      theme_sortseq()
+    bimodality_reference <- bimodality_supported[
+      bimodality_supported$is_reference_variant, , drop = FALSE
+    ]
+    if (nrow(bimodality_reference) == 1) {
+      p_high_low_tail <- p_high_low_tail + ggplot2::geom_point(
+        data = bimodality_reference,
+        shape = 8, size = 5.2, stroke = 1.2, color = "#B2182B"
+      )
+    }
+    save_bimodality_png(
+      "19_high_vs_low_tail_probability.png", p_high_low_tail
+    )
+    bimodality_plots[["19"]] <- p_high_low_tail
+  }
+
+  count_group_levels <- c("<200", "200-499", "500-999", "1000-4999", ">=5000")
+  bimodality_by_count$read_count_group <- factor(
+    bimodality_by_count$read_count_group, levels = count_group_levels
+  )
+  bimodality_by_count$clear_bimodal_percent_of_supported <- suppressWarnings(
+    as.numeric(bimodality_by_count$clear_bimodal_percent_of_supported)
+  )
+  bimodality_by_count$read_supported_variants <- suppressWarnings(
+    as.numeric(bimodality_by_count$read_supported_variants)
+  )
+  p_bimodality_fraction <- ggplot2::ggplot(
+    bimodality_by_count,
+    ggplot2::aes(
+      x = read_count_group,
+      y = clear_bimodal_percent_of_supported
+    )
+  ) +
+    ggplot2::geom_col(width = 0.68, fill = colors[["blue"]]) +
+    ggplot2::geom_text(
+      ggplot2::aes(
+        label = ifelse(
+          read_supported_variants > 0,
+          sprintf("%.1f%%\n(n=%s)", clear_bimodal_percent_of_supported,
+                  scales::comma(read_supported_variants)),
+          "n=0"
+        )
+      ),
+      vjust = -0.18, size = 3.8, color = colors[["ink"]]
+    ) +
+    ggplot2::scale_y_continuous(
+      labels = function(x) paste0(x, "%"),
+      expand = ggplot2::expansion(mult = c(0, 0.18))
+    ) +
+    ggplot2::labs(
+      title = "High+low-tail shapes by read-count group",
+      subtitle = "A strong decline with increasing reads supports a low-count sampling artifact",
+      x = "Total raw count across six bins", y = "Clear shape among supported UTRs"
+    ) +
+    theme_sortseq()
+  save_bimodality_png(
+    "18_bimodal_fraction_by_read_count.png", p_bimodality_fraction
+  )
+  bimodality_plots[["18"]] <- p_bimodality_fraction
+
+  if (nrow(bimodality_clear) > 0) {
+    bimodality_top_n <- min(50, nrow(bimodality_clear))
+    bimodality_top <- bimodality_clear[
+      order(
+        bimodality_clear$extreme_polarization_index_0to1,
+        decreasing = TRUE
+      ),
+      , drop = FALSE
+    ][seq_len(bimodality_top_n), , drop = FALSE]
+    bimodality_top$display_id <- ifelse(
+      bimodality_top$is_reference_variant,
+      paste0(bimodality_top$variant_id, " [reference]"),
+      bimodality_top$variant_id
+    )
+    bimodality_heat <- do.call(
+      rbind,
+      lapply(seq_len(nrow(bimodality_top)), function(row_number) {
+        data.frame(
+          variant_id = bimodality_top$display_id[[row_number]],
+          bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+          probability = as.numeric(
+            bimodality_top[row_number, paste0("bin", 1:6, "_probability")]
+          ),
+          is_reference = bimodality_top$is_reference_variant[[row_number]],
+          strong = bimodality_top$utra_like_strong_polarization_flag[[row_number]],
+          stringsAsFactors = FALSE
+        )
+      })
+    )
+    bimodality_heat$variant_id <- factor(
+      bimodality_heat$variant_id, levels = rev(bimodality_top$display_id)
+    )
+    p_bimodality_heat <- ggplot2::ggplot(
+      bimodality_heat,
+      ggplot2::aes(x = bin, y = variant_id, fill = probability)
+    ) +
+      ggplot2::geom_tile(color = "white", linewidth = 0.15) +
+      ggplot2::scale_fill_gradientn(
+        colors = viridisLite::viridis(256, option = "B"),
+        labels = scales::percent
+      ) +
+      ggplot2::labs(
+        title = sprintf(
+          "Top %d read-supported high+low-tail distributions",
+          bimodality_top_n
+        ),
+        subtitle = "Ranked by balanced extreme-tail mass; bin1 is highest mCherry",
+        x = "FACS bin", y = "UTR", fill = "Estimated\ncell fraction"
+      ) +
+      theme_sortseq() +
+      ggplot2::theme(
+        panel.grid = ggplot2::element_blank(),
+        axis.text.y = ggplot2::element_text(size = 7.5)
+      )
+    if (any(bimodality_heat$strong)) {
+      p_bimodality_heat <- p_bimodality_heat + ggplot2::geom_tile(
+        data = bimodality_heat[bimodality_heat$strong, , drop = FALSE],
+        fill = NA, color = colors[["orange"]], linewidth = 0.75
+      )
+    }
+    if (any(bimodality_heat$is_reference)) {
+      p_bimodality_heat <- p_bimodality_heat + ggplot2::geom_tile(
+        data = bimodality_heat[bimodality_heat$is_reference, , drop = FALSE],
+        fill = NA, color = "#B2182B", linewidth = 0.95
+      )
+    }
+    save_bimodality_png(
+      "20_clear_bimodal_bin_probability_heatmap.png",
+      p_bimodality_heat, 10.2, max(7.2, nrow(bimodality_top) * 0.19)
+    )
+    bimodality_plots[["20"]] <- p_bimodality_heat
+  }
+
+  bimodality_plot_statistics <- data.frame(
+    metric = c(
+      "read_supported_utr", "clear_bimodal_count",
+      "utra_like_strong_polarization_count"
+    ),
+    value = c(
+      nrow(bimodality_supported), nrow(bimodality_clear),
+      sum(bimodality_supported$utra_like_strong_polarization_flag, na.rm = TRUE)
+    ),
+    stringsAsFactors = FALSE
+  )
+  write.csv(
+    bimodality_plot_statistics,
+    file.path(bimodality_output_dir, "bimodality_plot_statistics.csv"),
+    quote = FALSE, row.names = FALSE
+  )
+  if (length(bimodality_plots) > 0) {
+    bimodality_plots <- bimodality_plots[order(names(bimodality_plots))]
+    grDevices::pdf(
+      file.path(bimodality_output_dir, "bimodality_qc_figures.pdf"),
+      width = 13.333, height = 7.5, onefile = TRUE,
+      family = "Helvetica", paper = "special"
+    )
+    for (plot in bimodality_plots) {
+      print(plot)
+    }
+    grDevices::dev.off()
+    plots <- c(plots, bimodality_plots)
+  }
+}
+
 # Optional NGS_LibraryQC mapping summary used for tabular audit.
 library_metrics_path <- file.path(libraryqc_dir, "combined", "all_sample_metrics.csv")
 if (file.exists(library_metrics_path)) {

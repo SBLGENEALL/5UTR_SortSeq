@@ -385,6 +385,18 @@ Python 단계는 기존 `results/sortseq`만 `archive/`로 이동합니다. `raw
 `results/index_rescue`, `results/library_qc`는 이동하거나 다시 계산하지 않습니다.
 계산식과 후보 flag는 [TOP15_ENRICHMENT_KO.md](TOP15_ENRICHMENT_KO.md)를 참조하세요.
 
+UTR A처럼 bin1·2와 bin5·6에 동시에 많고 middle bin이 비어 보이는 분포가
+read-count artifact인지 확인하려면 Python 환경에서 추가 QC를 실행합니다.
+
+```bash
+bash run_pipeline.sh bimodality-qc
+```
+
+이 명령은 기존 analyze 결과를 읽기만 하며 rescue, LibraryQC, score를 다시 계산하거나
+삭제하지 않습니다. `total six-bin count`, 양쪽 tail의 raw count, middle valley를 함께
+검사하고 read-count 구간별 양극화 후보 비율을 계산합니다. 기준과 해석은
+[BIMODALITY_QC_KO.md](BIMODALITY_QC_KO.md)를 참조하세요.
+
 | 파일 | 계산 단계 | 의미 |
 |---|---|---|
 | `01_raw_counts.csv` | Raw count | variant count matrix의 원래 count |
@@ -437,6 +449,11 @@ results/sortseq/figures/strict/10_strict_top_utr_bin_enrichment_heatmap.png
 results/sortseq/figures/strict/11_strict_unsorted_vs_target_gate.png
 results/sortseq/figures/strict/12_strict_reference_score_position.png
 results/sortseq/figures/strict/strict_candidate_figures.pdf
+results/sortseq/figures/bimodality/17_polarization_vs_read_count.png
+results/sortseq/figures/bimodality/18_bimodal_fraction_by_read_count.png
+results/sortseq/figures/bimodality/19_high_vs_low_tail_probability.png
+results/sortseq/figures/bimodality/20_clear_bimodal_bin_probability_heatmap.png
+results/sortseq/figures/bimodality/bimodality_qc_figures.pdf
 ```
 
 09번은 절대 cell fraction이고, 10번은 `log2(probability / bin fraction)`입니다.

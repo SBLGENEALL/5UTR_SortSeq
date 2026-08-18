@@ -14,6 +14,7 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh libraryqc
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh analyze
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh scoring-steps
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh bimodality-qc
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh status
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh resources
@@ -23,7 +24,7 @@ Usage:
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|bimodality-qc|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
   usage
   exit 2
 fi
@@ -73,6 +74,12 @@ STRICT_MIN_DETECTED_BINS="${STRICT_MIN_DETECTED_BINS:-3}"
 JACKPOT_MAX_BIN_PROBABILITY="${JACKPOT_MAX_BIN_PROBABILITY:-0.85}"
 JACKPOT_MAX_DETECTED_BINS="${JACKPOT_MAX_DETECTED_BINS:-2}"
 REFERENCE_VARIANT_ID="${REFERENCE_VARIANT_ID:-auto}"
+BIMODALITY_MIN_TOTAL_COUNT="${BIMODALITY_MIN_TOTAL_COUNT:-200}"
+BIMODALITY_MIN_EACH_TAIL_COUNT="${BIMODALITY_MIN_EACH_TAIL_COUNT:-20}"
+BIMODALITY_MIN_HIGH_TAIL_PROBABILITY="${BIMODALITY_MIN_HIGH_TAIL_PROBABILITY:-0.20}"
+BIMODALITY_MIN_LOW_TAIL_PROBABILITY="${BIMODALITY_MIN_LOW_TAIL_PROBABILITY:-0.20}"
+BIMODALITY_MAX_MIDDLE_PROBABILITY="${BIMODALITY_MAX_MIDDLE_PROBABILITY:-0.30}"
+BIMODALITY_MAX_VALLEY_RATIO="${BIMODALITY_MAX_VALLEY_RATIO:-0.75}"
 
 # Multiprocessing stages own the parallelism. Prevent BLAS/OpenMP libraries
 # loaded by individual workers from multiplying 128 workers by extra threads.
@@ -512,6 +519,21 @@ run_scoring_steps() {
     --reference-variant-id "${REFERENCE_VARIANT_ID}"
 }
 
+run_bimodality_qc() {
+  local result_table="${RESULTS_DIR}/sortseq/utr_results_full.tsv"
+  require_path "${result_table}" "Sort-seq result table"
+  echo "Quantifying high+low-tail polarization and read-count dependence"
+  "${PYTHON_BIN}" "${REPO_DIR}/scripts/qc_bimodality.py" \
+    --input "${result_table}" \
+    --outdir "${RESULTS_DIR}/sortseq/bimodality_qc" \
+    --min-total-count "${BIMODALITY_MIN_TOTAL_COUNT}" \
+    --min-each-tail-count "${BIMODALITY_MIN_EACH_TAIL_COUNT}" \
+    --min-high-tail-probability "${BIMODALITY_MIN_HIGH_TAIL_PROBABILITY}" \
+    --min-low-tail-probability "${BIMODALITY_MIN_LOW_TAIL_PROBABILITY}" \
+    --max-middle-probability "${BIMODALITY_MAX_MIDDLE_PROBABILITY}" \
+    --max-valley-ratio "${BIMODALITY_MAX_VALLEY_RATIO}"
+}
+
 if [[ "${MODE}" == "full" && "${OPTION}" == "--replace" ]]; then
   archive_existing_outputs
 fi
@@ -522,6 +544,7 @@ case "${MODE}" in
   libraryqc) run_libraryqc ;;
   analyze) run_analyze ;;
   scoring-steps) run_scoring_steps ;;
+  bimodality-qc) run_bimodality_qc ;;
   plot) run_plot ;;
   status) show_status ;;
   resources) show_resources ;;

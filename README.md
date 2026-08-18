@@ -97,6 +97,7 @@ bash run_pipeline.sh rescue
 bash run_pipeline.sh libraryqc
 bash run_pipeline.sh analyze
 bash run_pipeline.sh scoring-steps
+bash run_pipeline.sh bimodality-qc
 bash run_pipeline.sh plot
 ```
 
@@ -121,6 +122,9 @@ results/sortseq/reference_comparison.tsv
 results/sortseq/top15_enrichment_ranking.csv
 results/sortseq/top15_candidates.csv
 results/sortseq/top15_priority_candidates.csv
+results/sortseq/bimodality_qc/bimodality_summary.csv
+results/sortseq/bimodality_qc/clear_bimodal_candidates.csv
+results/sortseq/bimodality_qc/utra_like_strong_polarization.csv
 results/sortseq/figures/sortseq_qc_figures.pdf
 results/sortseq/figures/strict/strict_candidate_figures.pdf
 results/sortseq/figures/top15/top15_candidate_figures.pdf
@@ -153,6 +157,18 @@ UTR frequency를 whole unsorted와 비교한 `top15_vs_unsorted_log2_enrichment`
 `bin1+bin2 >= 20`입니다. bin1과 bin2가 모두 unsorted보다 농축되고 original보다
 combined enrichment가 큰 UTR를 후보로 표시합니다. 자세한 식, 결과 열, 문헌 근거는
 [bin1·bin2 중심 고발현 랭킹](docs/TOP15_ENRICHMENT_KO.md)을 보세요.
+
+## UTR A형 high+low-tail 분포 QC
+
+bin1·2와 bin5·6에 동시에 많고 bin3·4가 비어 보이는 UTR는 평균 score만으로 분류하지
+않습니다. `bash run_pipeline.sh bimodality-qc`는 양쪽 tail probability, middle valley,
+양쪽 tail의 raw-read support를 함께 검사하고, total read 구간별 후보 비율과
+read count–polarization 상관을 계산합니다. 이 결과는 “bimodality-like shape” QC이며
+두 biological state의 증명은 아닙니다.
+
+Python 환경에서 QC를 실행한 뒤 R 환경에서 기존 `plot` 명령을 실행하면
+`results/sortseq/figures/bimodality/`에 17–20번 그림과 PDF가 생성됩니다. 자세한 기준과
+해석은 [UTR A형 양극화 분포 QC](docs/BIMODALITY_QC_KO.md)를 보세요.
 
 ## Scoring 계산을 5단계 CSV로 확인
 
@@ -217,7 +233,8 @@ v0.1.7의 R 그림은 `unsorted >= 100`, `total six bins >= 500`, `bin1+2 >= 50`
 전체 흐름은 [docs/PIPELINE_WORKFLOW_KO.md](docs/PIPELINE_WORKFLOW_KO.md),
 서버 설정은 [docs/SERVER_GUIDE_KO.md](docs/SERVER_GUIDE_KO.md), 결과 해석은
 [docs/RESULTS_GUIDE_KO.md](docs/RESULTS_GUIDE_KO.md), Undetermined 처리 원칙은
-[docs/UNDETERMINED_RESCUE_KO.md](docs/UNDETERMINED_RESCUE_KO.md)를 보세요.
+[docs/UNDETERMINED_RESCUE_KO.md](docs/UNDETERMINED_RESCUE_KO.md), 양극화 분포는
+[docs/BIMODALITY_QC_KO.md](docs/BIMODALITY_QC_KO.md)를 보세요.
 
 ## 자체 테스트
 

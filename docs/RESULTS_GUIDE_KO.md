@@ -115,6 +115,23 @@ R 그림은 `results/sortseq/figures/strict/`에 생성됩니다. Probability he
 `log2(probability / population fraction)`을 사용하므로 bin1–6의 서로 다른 크기를
 제거하고 어느 bin에 상대적으로 농축됐는지 보여줍니다.
 
+## UTR A형 양극화 분포
+
+bin1·2와 bin5·6가 동시에 높고 bin3·4가 낮은 UTR는 평균적인 고발현 UTR와 구분합니다.
+이 분포는 일부 cell이 high일 가능성을 보여주지만, pooled 6-bin 데이터만으로 두 개의
+single-cell peak를 증명하지는 못합니다. 또한 낮은 raw count에서는 우연히 middle bin이
+비어 양극화처럼 보일 수 있습니다.
+
+```bash
+bash run_pipeline.sh bimodality-qc
+```
+
+결과의 `clear_bimodal_flag`는 total six-bin count 200 이상, 양쪽 tail raw count 각각
+20 이상, high/low tail과 middle-valley 조건을 모두 통과한 exploratory flag입니다.
+`bimodality_by_read_count.csv`와 `bimodality_count_sensitivity.csv`에서 cutoff를 높일수록
+후보가 급감하는지 확인합니다. 자세한 설명은
+[BIMODALITY_QC_KO.md](BIMODALITY_QC_KO.md)를 보세요.
+
 ## 결론 문구
 
 biological replicate가 하나라면 다음 수준이 타당합니다.
