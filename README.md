@@ -118,21 +118,41 @@ results/sortseq/high_candidates.tsv
 results/sortseq/strict_coverage_results.tsv
 results/sortseq/high_confidence_candidates.tsv
 results/sortseq/reference_comparison.tsv
+results/sortseq/top15_enrichment_ranking.csv
+results/sortseq/top15_candidates.csv
+results/sortseq/top15_priority_candidates.csv
 results/sortseq/figures/sortseq_qc_figures.pdf
 results/sortseq/figures/strict/strict_candidate_figures.pdf
+results/sortseq/figures/top15/top15_candidate_figures.pdf
 ```
 
 `original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 score 차이와
 high15 fold가 표에 추가되고, scatter/heatmap/score-distribution/unsorted-gate 그림에는
-빨간 별 또는 선으로 표시됩니다. Rescue와 LibraryQC를 유지하고 reference-aware 결과만
-다시 만들려면 새 코드에서 다음을 실행합니다.
+빨간 별 또는 선으로 표시됩니다. Rescue와 LibraryQC를 유지하고 Python 분석만
+다시 만들려면 다음을 실행합니다.
 
 ```bash
-bash run_pipeline.sh reanalyze
+bash run_pipeline.sh reanalyze-analysis
+
+# 별도 R 환경에서
+bash run_pipeline.sh plot
 ```
 
 기존 `results/sortseq`은 `archive/`로 이동되며 raw FASTQ, rescue, LibraryQC 결과는
 수정되지 않습니다.
+
+## bin1·bin2 중심 top15 hit 랭킹
+
+v0.1.9부터 평균 분포를 나타내는 기존 `expected_bin_score`와 별도로, bin1+bin2의
+UTR frequency를 whole unsorted와 비교한 `top15_vs_unsorted_log2_enrichment`를
+주 hit-selection rank로 제공합니다. bin1·2에 임의로 큰 ordinal weight를 주지 않고,
+두 high bin의 실제 population fraction으로 합친 뒤 unsorted representation으로
+나눕니다.
+
+기본 read support는 `unsorted >= 50`, `total six bins >= 200`,
+`bin1+bin2 >= 20`입니다. bin1과 bin2가 모두 unsorted보다 농축되고 original보다
+combined enrichment가 큰 UTR를 후보로 표시합니다. 자세한 식, 결과 열, 문헌 근거는
+[bin1·bin2 중심 고발현 랭킹](docs/TOP15_ENRICHMENT_KO.md)을 보세요.
 
 ## Scoring 계산을 5단계 CSV로 확인
 
@@ -154,6 +174,7 @@ results/sortseq/scoring_steps/04_within_utr_bin_probability.csv
 results/sortseq/scoring_steps/05_score_contributions_and_final_score.csv
 results/sortseq/scoring_steps/06_all_steps_combined_audit.csv
 results/sortseq/scoring_steps/07_calculation_checks.csv
+results/sortseq/scoring_steps/08_top15_unsorted_enrichment_ranking.csv
 ```
 
 여기서 `binN_probability`는 sequencing read가 그 bin에 들어갈 확률이 아니라,

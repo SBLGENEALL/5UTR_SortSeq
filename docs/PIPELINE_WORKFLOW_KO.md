@@ -341,6 +341,8 @@ results/sortseq/easy_report.html
 2. `expected_bin_score`: 6에 가까울수록 높은 mCherry
 3. `high15_probability`: bin1+bin2에 있을 추정 확률
 4. `high15_enrichment`: 1이면 pool 평균, 1보다 크면 high 쪽 농축
+5. `top15_vs_unsorted_log2_enrichment`: bin1+2의 whole-unsorted 대비 농축도;
+   고발현 hit-selection의 주 랭킹
 5. `most_enriched_bin`과 bin1–6 probability 분포
 6. `expression_tier`: 정확한 개별 등수보다 top 1/5/10% tier 중심
 7. whole unsorted 대비 target-gate representation은 보조 QC로 사용
@@ -367,6 +369,21 @@ LibraryQC의 `variant_count_matrix.csv`를 사용해 전체 UTR의 중간 계산
 ```bash
 bash run_pipeline.sh scoring-steps
 ```
+
+기존 rescue/LibraryQC를 유지하고 v0.1.9 top15 랭킹만 다시 계산할 때는 환경을
+나누어 실행합니다.
+
+```bash
+# Python 환경
+bash run_pipeline.sh reanalyze-analysis
+
+# R 환경
+bash run_pipeline.sh plot
+```
+
+Python 단계는 기존 `results/sortseq`만 `archive/`로 이동합니다. `raw_data`,
+`results/index_rescue`, `results/library_qc`는 이동하거나 다시 계산하지 않습니다.
+계산식과 후보 flag는 [TOP15_ENRICHMENT_KO.md](TOP15_ENRICHMENT_KO.md)를 참조하세요.
 
 | 파일 | 계산 단계 | 의미 |
 |---|---|---|

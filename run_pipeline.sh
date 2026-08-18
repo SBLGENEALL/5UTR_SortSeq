@@ -17,12 +17,13 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh status
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh resources
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh reanalyze-analysis
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh reanalyze
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh full [--replace]
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|plot|status|resources|reanalyze|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
   usage
   exit 2
 fi
@@ -60,6 +61,10 @@ NESTED_WORKER_THREADS="${NESTED_WORKER_THREADS:-1}"
 OVERALL_GATE_FRACTION="${OVERALL_GATE_FRACTION:-0.90}"
 MIN_UNSORTED_COUNT="${MIN_UNSORTED_COUNT:-50}"
 MIN_TOTAL_BIN_COUNT="${MIN_TOTAL_BIN_COUNT:-100}"
+TOP_HIT_MIN_UNSORTED_COUNT="${TOP_HIT_MIN_UNSORTED_COUNT:-50}"
+TOP_HIT_MIN_TOTAL_BIN_COUNT="${TOP_HIT_MIN_TOTAL_BIN_COUNT:-200}"
+TOP_HIT_MIN_HIGH_BIN_COUNT="${TOP_HIT_MIN_HIGH_BIN_COUNT:-20}"
+TOP_HIT_MIN_ENRICHMENT="${TOP_HIT_MIN_ENRICHMENT:-1.0}"
 STRICT_MIN_UNSORTED_COUNT="${STRICT_MIN_UNSORTED_COUNT:-1000}"
 STRICT_MIN_TOTAL_BIN_COUNT="${STRICT_MIN_TOTAL_BIN_COUNT:-5000}"
 STRICT_RELATIVE_MEDIAN_FRACTION="${STRICT_RELATIVE_MEDIAN_FRACTION:-0.10}"
@@ -467,6 +472,10 @@ run_analyze() {
     --overall-gate-fraction "${OVERALL_GATE_FRACTION}" \
     --min-unsorted-count "${MIN_UNSORTED_COUNT}" \
     --min-total-bin-count "${MIN_TOTAL_BIN_COUNT}" \
+    --top-hit-min-unsorted-count "${TOP_HIT_MIN_UNSORTED_COUNT}" \
+    --top-hit-min-total-bin-count "${TOP_HIT_MIN_TOTAL_BIN_COUNT}" \
+    --top-hit-min-high-bin-count "${TOP_HIT_MIN_HIGH_BIN_COUNT}" \
+    --top-hit-min-enrichment "${TOP_HIT_MIN_ENRICHMENT}" \
     --strict-min-unsorted-count "${STRICT_MIN_UNSORTED_COUNT}" \
     --strict-min-total-bin-count "${STRICT_MIN_TOTAL_BIN_COUNT}" \
     --strict-relative-median-fraction "${STRICT_RELATIVE_MEDIAN_FRACTION}" \
@@ -516,6 +525,11 @@ case "${MODE}" in
   plot) run_plot ;;
   status) show_status ;;
   resources) show_resources ;;
+  reanalyze-analysis)
+    archive_sortseq_output
+    run_analyze
+    echo "Python analysis completed; run 'bash run_pipeline.sh plot' in the R environment."
+    ;;
   reanalyze)
     archive_sortseq_output
     run_analyze

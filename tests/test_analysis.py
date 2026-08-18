@@ -95,6 +95,15 @@ class EasyPipelineTests(unittest.TestCase):
         observed = [neutral[f"bin{x}_probability"] for x in range(1, 7)]
         np.testing.assert_allclose(observed, expected)
         self.assertAlmostEqual(neutral["high15_enrichment"], 1.0, places=6)
+        self.assertAlmostEqual(
+            neutral["top15_vs_unsorted_enrichment"], 1.0, delta=0.003
+        )
+        self.assertGreater(
+            result.set_index("variant_id").loc[
+                "high", "top15_vs_unsorted_enrichment"
+            ],
+            neutral["top15_vs_unsorted_enrichment"],
+        )
 
     def test_whole_unsorted_gate_probability_is_secondary_estimate(self):
         variants, samples, counts = self.make_inputs()
@@ -159,6 +168,15 @@ class EasyPipelineTests(unittest.TestCase):
         self.assertGreater(indexed.loc["high", "delta_score_vs_reference"], 0)
         self.assertLess(indexed.loc["low", "delta_score_vs_reference"], 0)
         self.assertGreater(indexed.loc["high", "high15_fold_vs_reference"], 1)
+        self.assertGreater(
+            indexed.loc["high", "delta_top15_log2_enrichment_vs_reference"], 0
+        )
+        self.assertTrue(indexed.loc["high", "top15_candidate_flag"])
+        self.assertAlmostEqual(
+            indexed.loc["orginal", "delta_top15_log2_enrichment_vs_reference"],
+            0.0,
+            places=10,
+        )
         self.assertEqual(summary["reference_variant_id"], "orginal")
         self.assertEqual(summary["variants_with_score_above_reference"], 1)
         self.assertIn("delta_score_vs_reference", essential.columns)

@@ -52,6 +52,12 @@ for (column in c(
   "expected_bin_score", "high15_enrichment", "estimated_rank",
   "high15_probability", "unsorted_frequency", "reconstructed_gate_frequency",
   "unsorted_count", "total_6bin_count", "detected_in_n_bins",
+  "high_bin_raw_count", "top15_rank", "top15_percentile",
+  "bin1_vs_unsorted_enrichment", "bin2_vs_unsorted_enrichment",
+  "bin1_vs_unsorted_log2_enrichment", "bin2_vs_unsorted_log2_enrichment",
+  "top15_vs_unsorted_enrichment", "top15_vs_unsorted_log2_enrichment",
+  "delta_top15_log2_enrichment_vs_reference",
+  "top15_enrichment_fold_vs_reference",
   paste0("bin", 1:6, "_count"),
   paste0("bin", 1:6, "_probability")
 )) {
@@ -63,6 +69,15 @@ as_bool <- function(values) {
 results$pass_coverage <- tolower(as.character(results$pass_coverage)) %in% c("true", "t", "1")
 if ("high_candidate_flag" %in% colnames(results)) {
   results$high_candidate_flag <- as_bool(results$high_candidate_flag)
+}
+for (column in c(
+  "top15_read_support_pass", "top15_both_bins_enriched",
+  "top15_candidate_flag", "top15_priority_candidate_flag",
+  "single_bin_jackpot_suspect"
+)) {
+  if (column %in% colnames(results)) {
+    results[[column]] <- as_bool(results[[column]])
+  }
 }
 if ("is_reference_variant" %in% colnames(results)) {
   results$is_reference_variant <- as_bool(results$is_reference_variant)
@@ -734,6 +749,243 @@ if (length(strict_candidate_ids) > 0) {
   }
   grDevices::dev.off()
   plots <- c(plots, strict_plots)
+}
+
+# Top-bin enrichment figures. These use the combined bin1+bin2 composition
+# relative to whole unsorted as the primary hit-selection endpoint, while the
+# ordinal expected score remains a secondary description of the full profile.
+top15_required <- c(
+  "top15_read_support_pass", "top15_candidate_flag",
+  "top15_priority_candidate_flag", "top15_rank",
+  "top15_vs_unsorted_log2_enrichment",
+  "bin1_vs_unsorted_log2_enrichment", "bin2_vs_unsorted_log2_enrichment"
+)
+if (all(top15_required %in% colnames(results))) {
+  top15_output_dir <- file.path(output_dir, "top15")
+  dir.create(top15_output_dir, recursive = TRUE, showWarnings = FALSE)
+  save_top15_png <- function(filename, plot, width = 11.8, height = 6.6) {
+    ragg::agg_png(
+      filename = file.path(top15_output_dir, filename), width = width, height = height,
+      units = "in", res = 320, background = "white"
+    )
+    print(plot)
+    grDevices::dev.off()
+  }
+
+  top15_supported <- results[
+    results$top15_read_support_pass &
+      is.finite(results$top15_vs_unsorted_log2_enrichment),
+    , drop = FALSE
+  ]
+  top15_candidates <- top15_supported[
+    top15_supported$top15_candidate_flag, , drop = FALSE
+  ]
+  top15_priority <- top15_supported[
+    top15_supported$top15_priority_candidate_flag, , drop = FALSE
+  ]
+  top15_plots <- list()
+
+  if (nrow(top15_supported) > 0) {
+    p_top15_consistency <- ggplot2::ggplot() +
+      ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = colors[["muted"]]) +
+      ggplot2::geom_vline(xintercept = 0, linetype = "dashed", color = colors[["muted"]]) +
+      ggplot2::geom_point(
+        data = top15_supported,
+        ggplot2::aes(
+          x = bin1_vs_unsorted_log2_enrichment,
+          y = bin2_vs_unsorted_log2_enrichment
+        ),
+        color = "#C7CED3", alpha = 0.50, size = 1.5
+      ) +
+      ggplot2::geom_point(
+        data = top15_candidates,
+        ggplot2::aes(
+          x = bin1_vs_unsorted_log2_enrichment,
+          y = bin2_vs_unsorted_log2_enrichment
+        ),
+        color = colors[["orange"]], alpha = 0.80, size = 2.2
+      ) +
+      ggplot2::geom_point(
+        data = top15_priority,
+        ggplot2::aes(
+          x = bin1_vs_unsorted_log2_enrichment,
+          y = bin2_vs_unsorted_log2_enrichment
+        ),
+        color = colors[["purple"]], alpha = 0.90, size = 2.6
+      ) +
+      ggplot2::labs(
+        title = "Consistency of enrichment in the two highest mCherry bins",
+        subtitle = sprintf(
+          "Gray = read-supported (%s); orange = top15 candidates (%s); purple = priority (%s)",
+          scales::comma(nrow(top15_supported)), scales::comma(nrow(top15_candidates)),
+          scales::comma(nrow(top15_priority))
+        ),
+        caption = "Positive on both axes means enrichment versus whole unsorted in both bin1 and bin2.",
+        x = "bin1 vs unsorted log2 enrichment",
+        y = "bin2 vs unsorted log2 enrichment"
+      ) +
+      theme_sortseq()
+    if (nrow(reference) == 1) {
+      p_top15_consistency <- p_top15_consistency +
+        ggplot2::geom_point(
+          data = reference,
+          ggplot2::aes(
+            x = bin1_vs_unsorted_log2_enrichment,
+            y = bin2_vs_unsorted_log2_enrichment
+          ),
+          inherit.aes = FALSE, shape = 8, size = 5.2, stroke = 1.2,
+          color = "#B2182B"
+        )
+    }
+    save_top15_png("13_bin1_bin2_unsorted_enrichment.png", p_top15_consistency)
+    top15_plots[[length(top15_plots) + 1]] <- p_top15_consistency
+
+    p_top15_score <- ggplot2::ggplot(
+      top15_supported,
+      ggplot2::aes(x = expected_bin_score, y = top15_vs_unsorted_log2_enrichment)
+    ) +
+      ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = colors[["muted"]]) +
+      ggplot2::geom_point(color = "#C7CED3", alpha = 0.50, size = 1.5) +
+      ggplot2::geom_point(
+        data = top15_candidates,
+        color = colors[["orange"]], alpha = 0.85, size = 2.3
+      ) +
+      ggplot2::geom_point(
+        data = top15_priority,
+        color = colors[["purple"]], alpha = 0.90, size = 2.7
+      ) +
+      ggplot2::labs(
+        title = "Top-15% hit enrichment versus full-distribution score",
+        subtitle = "The y-axis is the primary hit rank; the x-axis describes the complete six-bin profile",
+        x = "Expected bin score (6 = high, 1 = low)",
+        y = "Combined bin1+2 vs unsorted log2 enrichment"
+      ) +
+      theme_sortseq()
+    if (nrow(reference) == 1) {
+      p_top15_score <- p_top15_score +
+        ggplot2::geom_point(
+          data = reference,
+          ggplot2::aes(
+            x = expected_bin_score,
+            y = top15_vs_unsorted_log2_enrichment
+          ),
+          inherit.aes = FALSE, shape = 8, size = 5.2, stroke = 1.2,
+          color = "#B2182B"
+        )
+    }
+    save_top15_png("14_top15_enrichment_vs_expected_score.png", p_top15_score)
+    top15_plots[[length(top15_plots) + 1]] <- p_top15_score
+
+    top15_top_n <- min(50, nrow(top15_supported))
+    top15_top <- top15_supported[
+      order(top15_supported$top15_rank), , drop = FALSE
+    ][seq_len(top15_top_n), , drop = FALSE]
+    top15_reference_added <- FALSE
+    if (nrow(reference) == 1 && !(reference$variant_id[[1]] %in% top15_top$variant_id)) {
+      top15_top <- rbind(top15_top, reference)
+      top15_reference_added <- TRUE
+    }
+    top15_top$display_id <- ifelse(
+      top15_top$is_reference_variant,
+      paste0(top15_top$reference_display_label, " [reference]"),
+      top15_top$variant_id
+    )
+    top15_heat <- do.call(
+      rbind,
+      lapply(seq_len(nrow(top15_top)), function(row_number) {
+        data.frame(
+          variant_id = top15_top$display_id[[row_number]],
+          bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+          probability = as.numeric(top15_top[row_number, probability_columns]),
+          is_reference = top15_top$is_reference_variant[[row_number]],
+          stringsAsFactors = FALSE
+        )
+      })
+    )
+    top15_heat$variant_id <- factor(
+      top15_heat$variant_id, levels = rev(top15_top$display_id)
+    )
+    p_top15_heat <- ggplot2::ggplot(
+      top15_heat,
+      ggplot2::aes(x = bin, y = variant_id, fill = probability)
+    ) +
+      ggplot2::geom_tile(color = "white", linewidth = 0.15) +
+      ggplot2::scale_fill_gradientn(
+        colors = viridisLite::viridis(256, option = "B"), labels = scales::percent
+      ) +
+      ggplot2::labs(
+        title = sprintf("Top %d UTRs ranked by top-15%% enrichment", top15_top_n),
+        subtitle = if (top15_reference_added) {
+          "Read-supported top ranking plus reference; bin probability shows the complete profile"
+        } else {
+          "Read-supported top ranking; bin probability shows the complete profile"
+        },
+        x = "FACS bin", y = "UTR", fill = "Estimated\ncell fraction"
+      ) +
+      theme_sortseq() +
+      ggplot2::theme(
+        panel.grid = ggplot2::element_blank(),
+        axis.text.y = ggplot2::element_text(size = 7.5)
+      )
+    if (any(top15_heat$is_reference)) {
+      p_top15_heat <- p_top15_heat + ggplot2::geom_tile(
+        data = top15_heat[top15_heat$is_reference, , drop = FALSE],
+        fill = NA, color = "#B2182B", linewidth = 0.9
+      )
+    }
+    save_top15_png(
+      "15_top15_ranked_bin_probability_heatmap.png",
+      p_top15_heat, 10.2, max(7.2, nrow(top15_top) * 0.19)
+    )
+    top15_plots[[length(top15_plots) + 1]] <- p_top15_heat
+
+    if (nrow(reference) == 1) {
+      p_top15_reference <- ggplot2::ggplot(
+        top15_supported,
+        ggplot2::aes(x = top15_vs_unsorted_log2_enrichment)
+      ) +
+        ggplot2::geom_histogram(bins = 45, fill = colors[["sky"]], color = "white") +
+        ggplot2::geom_vline(
+          xintercept = reference$top15_vs_unsorted_log2_enrichment[[1]],
+          color = "#B2182B", linewidth = 1.2, linetype = "dashed"
+        ) +
+        ggplot2::labs(
+          title = "Reference position in the top-15% enrichment ranking",
+          subtitle = "Red line = original/orginal",
+          x = "Combined bin1+2 vs unsorted log2 enrichment",
+          y = "Read-supported UTRs"
+        ) +
+        theme_sortseq()
+      save_top15_png("16_top15_reference_position.png", p_top15_reference)
+      top15_plots[[length(top15_plots) + 1]] <- p_top15_reference
+    }
+
+    top15_statistics <- data.frame(
+      metric = c(
+        "read_supported_utr", "top15_candidate_count",
+        "top15_priority_candidate_count"
+      ),
+      value = c(
+        nrow(top15_supported), nrow(top15_candidates), nrow(top15_priority)
+      ),
+      stringsAsFactors = FALSE
+    )
+    write.csv(
+      top15_statistics,
+      file.path(top15_output_dir, "top15_plot_statistics.csv"),
+      quote = FALSE, row.names = FALSE
+    )
+    grDevices::pdf(
+      file.path(top15_output_dir, "top15_candidate_figures.pdf"),
+      width = 13.333, height = 7.5, onefile = TRUE,
+      family = "Helvetica", paper = "special"
+    )
+    for (plot in top15_plots) {
+      print(plot)
+    }
+    grDevices::dev.off()
+    plots <- c(plots, top15_plots)
+  }
 }
 
 # Optional NGS_LibraryQC mapping summary used for tabular audit.

@@ -20,6 +20,9 @@ UTR별 bin probability     p_ib = a_ib / sum_b(a_ib)
 | `expected_bin_score` | `6×p_bin1 + ... + 1×p_bin6` | 6에 가까울수록 high mCherry |
 | `high15_probability` | `p_bin1 + p_bin2` | 해당 UTR의 gated cell이 top 15%에 있을 추정 확률 |
 | `high15_enrichment` | high15 probability / 0.15 | 1=pool 평균, 1보다 크면 high 쪽 |
+| `top15_vs_unsorted_log2_enrichment` | combined bin1+2 frequency / unsorted frequency의 log2 | 고발현 hit의 주 랭킹 |
+| `bin1_vs_unsorted_enrichment` | bin1 frequency / unsorted frequency | extreme-high 구간 농축도 |
+| `bin2_vs_unsorted_enrichment` | bin2 frequency / unsorted frequency | 두 번째 high 구간 농축도 |
 | `most_enriched_bin` | `p_ib / w_b`가 최대인 bin | pool 대비 가장 농축된 위치 |
 | `dominant_cell_mass_bin` | `p_ib`가 최대인 bin | 실제 추정 cell mass가 가장 큰 위치 |
 | `gate_entry_probability_capped` | whole unsorted 대비 target-gate representation 근사 | 보조 QC이며 주 발현 score가 아님 |
@@ -34,6 +37,11 @@ UTR별 bin probability     p_ib = a_ib / sum_b(a_ib)
 - bin1→bin6 확률이 한쪽으로 비교적 매끄럽게 이동
 - 이상한 gate depletion이나 한-bin-only PCR jackpot이 없음
 - 1-mismatch와 2-mismatch rescue 설정에서 tier가 안정적
+
+고발현 hit 선정은 `expected_bin_score`보다
+`top15_vs_unsorted_log2_enrichment`를 주 랭킹으로 사용합니다. 전체 분포와
+intermediate-high phenotype은 expected score로 보조 확인합니다. 계산과 후보 기준은
+[TOP15_ENRICHMENT_KO.md](TOP15_ENRICHMENT_KO.md)에 정리되어 있습니다.
 
 ## Original/reference 대비 우위
 
@@ -54,10 +62,12 @@ High15 probability는 비율이므로 original 대비 fold로 비교할 수 있�
 original을 빨간 별, 빨간 테두리 또는 빨간 점선으로 표시합니다. Top50 밖에 있더라도
 heatmap에는 비교 행으로 추가합니다.
 
-기존 rescue/LibraryQC를 다시 계산하지 않고 reference 비교와 그림만 갱신하려면:
+기존 rescue/LibraryQC를 다시 계산하지 않고 Python 분석과 R 그림을 나누어 갱신하려면:
 
 ```bash
-bash run_pipeline.sh reanalyze
+bash run_pipeline.sh reanalyze-analysis
+# R 환경으로 전환한 뒤
+bash run_pipeline.sh plot
 ```
 
 ## unsorted의 역할

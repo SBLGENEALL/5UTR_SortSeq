@@ -87,6 +87,19 @@ class ScoringStepExportTests(unittest.TestCase):
                 step5.loc["high", "expected_bin_score"],
                 step5.loc["orginal", "expected_bin_score"],
             )
+            self.assertGreater(
+                step5.loc["high", "top15_vs_unsorted_enrichment"],
+                step5.loc["orginal", "top15_vs_unsorted_enrichment"],
+            )
+            self.assertAlmostEqual(
+                step5.loc["orginal", "delta_top15_log2_enrichment_vs_reference"],
+                0.0,
+                places=10,
+            )
+            ranking = pd.read_csv(
+                output / "08_top15_unsorted_enrichment_ranking.csv"
+            )
+            self.assertEqual(ranking.iloc[0]["variant_id"], "high")
 
 
 if __name__ == "__main__":

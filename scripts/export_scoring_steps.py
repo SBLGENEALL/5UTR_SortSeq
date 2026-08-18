@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--matrix", required=True, type=Path)
     parser.add_argument("--sample-map", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
+    parser.add_argument("--pseudocount", type=float, default=0.5)
     parser.add_argument(
         "--reference-variant-id",
         default="auto",
@@ -161,6 +162,8 @@ def load_inputs(matrix_path: Path, sample_map_path: Path):
 
 def main() -> int:
     args = parse_args()
+    if args.pseudocount <= 0:
+        raise ValueError("pseudocount must be positive")
     args.outdir.mkdir(parents=True, exist_ok=True)
     _, metadata, mapping, bins, counts, fraction_source = load_inputs(
         args.matrix, args.sample_map
@@ -220,6 +223,21 @@ def main() -> int:
     neutral_baseline = float(np.dot(fractions.to_numpy(), weights.to_numpy()))
     high15_probability = probability.iloc[:, :2].sum(axis=1, min_count=1)
     high15_fraction = float(fractions.iloc[:2].sum())
+    n_variants = len(metadata)
+    smooth_bins = (raw_bins + args.pseudocount).div(
+        depths[bin_ids] + args.pseudocount * n_variants,
+        axis=1,
+    )
+    smooth_unsorted = (raw_unsorted + args.pseudocount) / (
+        depths[unsorted_id] + args.pseudocount * n_variants
+    )
+    top15_combined_frequency = (
+        smooth_bins.iloc[:, :2].mul(fractions.iloc[:2], axis=1).sum(axis=1)
+        / high15_fraction
+    )
+    bin1_vs_unsorted_enrichment = smooth_bins.iloc[:, 0] / smooth_unsorted
+    bin2_vs_unsorted_enrichment = smooth_bins.iloc[:, 1] / smooth_unsorted
+    top15_vs_unsorted_enrichment = top15_combined_frequency / smooth_unsorted
     step5 = metadata.copy()
     for number, sample_id in enumerate(bin_ids, start=1):
         step5[f"bin{number}_score_weight"] = float(weights[sample_id])
@@ -229,6 +247,19 @@ def main() -> int:
     step5["score_shift_from_neutral"] = expected_score.to_numpy() - neutral_baseline
     step5["high15_probability"] = high15_probability.to_numpy()
     step5["high15_enrichment"] = high15_probability.to_numpy() / high15_fraction
+    step5["bin1_vs_unsorted_enrichment"] = bin1_vs_unsorted_enrichment.to_numpy()
+    step5["bin2_vs_unsorted_enrichment"] = bin2_vs_unsorted_enrichment.to_numpy()
+    step5["bin1_vs_unsorted_log2_enrichment"] = np.log2(
+        bin1_vs_unsorted_enrichment.to_numpy()
+    )
+    step5["bin2_vs_unsorted_log2_enrichment"] = np.log2(
+        bin2_vs_unsorted_enrichment.to_numpy()
+    )
+    step5["top15_combined_frequency"] = top15_combined_frequency.to_numpy()
+    step5["top15_vs_unsorted_enrichment"] = top15_vs_unsorted_enrichment.to_numpy()
+    step5["top15_vs_unsorted_log2_enrichment"] = np.log2(
+        top15_vs_unsorted_enrichment.to_numpy()
+    )
 
     reference_id = resolve_reference_id(metadata, args.reference_variant_id)
     if reference_id is not None:
@@ -236,12 +267,23 @@ def main() -> int:
         high15_by_id = pd.Series(high15_probability.to_numpy(), index=metadata["variant_id"])
         reference_score = float(score_by_id.loc[reference_id])
         reference_high15 = float(high15_by_id.loc[reference_id])
+        top15_unsorted_by_id = pd.Series(
+            top15_vs_unsorted_enrichment.to_numpy(), index=metadata["variant_id"]
+        )
+        reference_top15_unsorted = float(top15_unsorted_by_id.loc[reference_id])
         step5["is_reference_variant"] = metadata["variant_id"].eq(reference_id)
         step5["reference_expected_bin_score"] = reference_score
         step5["delta_score_vs_reference"] = expected_score.to_numpy() - reference_score
         step5["reference_high15_probability"] = reference_high15
         step5["delta_high15_probability_vs_reference"] = (
             high15_probability.to_numpy() - reference_high15
+        )
+        step5["reference_top15_vs_unsorted_enrichment"] = reference_top15_unsorted
+        step5["delta_top15_log2_enrichment_vs_reference"] = np.log2(
+            top15_vs_unsorted_enrichment.to_numpy() / reference_top15_unsorted
+        )
+        step5["top15_enrichment_fold_vs_reference"] = (
+            top15_vs_unsorted_enrichment.to_numpy() / reference_top15_unsorted
         )
 
     # A single wide audit table makes one-row tracing convenient.
@@ -258,7 +300,43 @@ def main() -> int:
         [f"bin{x}_probability" for x in range(1, 7)]
     ].max(axis=1)
     audit["single_bin_dominance_flag"] = audit["maximum_bin_probability"] >= 0.85
+    audit["top15_read_support_pass"] = (
+        (audit["unsorted_raw_count"] >= 50)
+        & (audit["total_6bin_raw_count"] >= 200)
+        & (audit["bin1_plus_bin2_raw_count"] >= 20)
+    )
+    audit["top15_both_bins_enriched"] = (
+        (audit["bin1_vs_unsorted_enrichment"] >= 1.0)
+        & (audit["bin2_vs_unsorted_enrichment"] >= 1.0)
+    )
+    audit["top15_rank"] = audit["top15_vs_unsorted_log2_enrichment"].where(
+        audit["top15_read_support_pass"]
+    ).rank(ascending=False, method="average")
     audit = audit.sort_values("expected_bin_score", ascending=False, na_position="last")
+
+    top15_columns = [
+        "variant_id",
+        "top15_rank",
+        "top15_vs_unsorted_enrichment",
+        "top15_vs_unsorted_log2_enrichment",
+        "bin1_vs_unsorted_enrichment",
+        "bin2_vs_unsorted_enrichment",
+        "unsorted_raw_count",
+        "total_6bin_raw_count",
+        "bin1_plus_bin2_raw_count",
+        "top15_both_bins_enriched",
+        "single_bin_dominance_flag",
+    ]
+    if reference_id is not None:
+        top15_columns.extend(
+            [
+                "delta_top15_log2_enrichment_vs_reference",
+                "top15_enrichment_fold_vs_reference",
+            ]
+        )
+    top15_ranking = audit.loc[
+        audit["top15_read_support_pass"], top15_columns
+    ].sort_values("top15_rank", ascending=True)
 
     parameter_rows = []
     mapped_by_id = mapping.set_index("sample_id")
@@ -310,6 +388,7 @@ def main() -> int:
     write_csv(step5, args.outdir / "05_score_contributions_and_final_score.csv")
     write_csv(audit, args.outdir / "06_all_steps_combined_audit.csv")
     write_csv(checks, args.outdir / "07_calculation_checks.csv")
+    write_csv(top15_ranking, args.outdir / "08_top15_unsorted_enrichment_ranking.csv")
 
     manifest = {
         "matrix": str(args.matrix.resolve()),
@@ -320,6 +399,10 @@ def main() -> int:
         "reference_variant_id": reference_id,
         "formula": "p_ib = w_b*(c_ib/N_b) / sum_k[w_k*(c_ik/N_k)]",
         "score": "S_i = sum_b[p_ib*(7-bin_number_b)]",
+        "top15_unsorted_enrichment": (
+            "E_i = [(w1*f_i1+w2*f_i2)/(w1+w2)] / f_i_unsorted"
+        ),
+        "top15_pseudocount": args.pseudocount,
     }
     (args.outdir / "scoring_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

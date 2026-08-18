@@ -53,6 +53,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pseudocount", type=float, default=0.5)
     parser.add_argument("--min-unsorted-count", type=int, default=50)
     parser.add_argument("--min-total-bin-count", type=int, default=100)
+    parser.add_argument("--top-hit-min-unsorted-count", type=int, default=50)
+    parser.add_argument("--top-hit-min-total-bin-count", type=int, default=200)
+    parser.add_argument("--top-hit-min-high-bin-count", type=int, default=20)
+    parser.add_argument("--top-hit-min-enrichment", type=float, default=1.0)
     parser.add_argument("--strict-min-unsorted-count", type=int, default=1000)
     parser.add_argument("--strict-min-total-bin-count", type=int, default=5000)
     parser.add_argument("--strict-relative-median-fraction", type=float, default=0.10)
@@ -306,6 +310,10 @@ def analyze(
     strict_min_detected_bins: int = 3,
     jackpot_max_bin_probability: float = 0.85,
     jackpot_max_detected_bins: int = 2,
+    top_hit_min_unsorted_count: int = 50,
+    top_hit_min_total_bin_count: int = 200,
+    top_hit_min_high_bin_count: int = 20,
+    top_hit_min_enrichment: float = 1.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     if pseudocount <= 0:
         raise ValueError("pseudocount must be positive")
@@ -323,6 +331,14 @@ def analyze(
         raise ValueError("jackpot_max_bin_probability must be between 0 and 1")
     if not 1 <= jackpot_max_detected_bins <= 6:
         raise ValueError("jackpot_max_detected_bins must be between 1 and 6")
+    if min(
+        top_hit_min_unsorted_count,
+        top_hit_min_total_bin_count,
+        top_hit_min_high_bin_count,
+    ) < 0:
+        raise ValueError("top-hit count cutoffs cannot be negative")
+    if top_hit_min_enrichment <= 0:
+        raise ValueError("top_hit_min_enrichment must be positive")
 
     bins = samples[samples["sample_type"].eq("bin")].sort_values("bin_number")
     bin_ids = bins["sample_id"].astype(str).tolist()
@@ -391,6 +407,32 @@ def analyze(
     result["high15_probability"] = bin_probability[bin_ids[:2]].sum(axis=1)
     result["high15_enrichment"] = result["high15_probability"] / high15_fraction
     result["high15_log2_enrichment"] = np.log2(result["high15_enrichment"].clip(lower=1e-12))
+
+    # Candidate-discovery endpoint: composition of the combined highest two
+    # fluorescence bins relative to the whole unsorted population. This is
+    # intentionally distinct from high15_enrichment above, which is conditional
+    # on being inside the target gate. Weighting f_bin1 and f_bin2 by their sorter
+    # fractions reconstructs the UTR frequency in the combined top population.
+    smooth_high15_frequency = (
+        smooth_bins[bin_ids[:2]].mul(fractions.iloc[:2], axis=1).sum(axis=1)
+        / high15_fraction
+    )
+    bin1_vs_unsorted_enrichment = smooth_bins[bin_ids[0]] / smooth_unsorted
+    bin2_vs_unsorted_enrichment = smooth_bins[bin_ids[1]] / smooth_unsorted
+    top15_vs_unsorted_enrichment = smooth_high15_frequency / smooth_unsorted
+    result["bin1_vs_unsorted_enrichment"] = bin1_vs_unsorted_enrichment
+    result["bin2_vs_unsorted_enrichment"] = bin2_vs_unsorted_enrichment
+    result["bin1_vs_unsorted_log2_enrichment"] = np.log2(
+        bin1_vs_unsorted_enrichment.clip(lower=1e-12)
+    )
+    result["bin2_vs_unsorted_log2_enrichment"] = np.log2(
+        bin2_vs_unsorted_enrichment.clip(lower=1e-12)
+    )
+    result["top15_combined_frequency"] = smooth_high15_frequency
+    result["top15_vs_unsorted_enrichment"] = top15_vs_unsorted_enrichment
+    result["top15_vs_unsorted_log2_enrichment"] = np.log2(
+        top15_vs_unsorted_enrichment.clip(lower=1e-12)
+    )
     result["low_bin_probability"] = bin_probability[bin_ids[4:]].sum(axis=1)
     result["low_bin_enrichment"] = result["low_bin_probability"] / low_fraction
 
@@ -445,6 +487,13 @@ def analyze(
         "high15_probability",
         "high15_enrichment",
         "high15_log2_enrichment",
+        "bin1_vs_unsorted_enrichment",
+        "bin2_vs_unsorted_enrichment",
+        "bin1_vs_unsorted_log2_enrichment",
+        "bin2_vs_unsorted_log2_enrichment",
+        "top15_combined_frequency",
+        "top15_vs_unsorted_enrichment",
+        "top15_vs_unsorted_log2_enrichment",
         "low_bin_probability",
         "low_bin_enrichment",
     ]
@@ -503,6 +552,35 @@ def analyze(
         (result["maximum_bin_probability"] >= jackpot_max_bin_probability)
         & (result["detected_in_n_bins"] <= jackpot_max_detected_bins)
     )
+
+    # Read-supported top-tail ranking. We do not require detection in three or
+    # more bins because a real sharply shifted UTR may legitimately occupy only
+    # bin1 and bin2. Sparse/single-bin behavior remains visible as a review flag.
+    result["top15_read_support_pass"] = (
+        (result["unsorted_count"] >= top_hit_min_unsorted_count)
+        & (result["total_6bin_count"] >= top_hit_min_total_bin_count)
+        & (result["high_bin_raw_count"] >= top_hit_min_high_bin_count)
+    )
+    result["top15_both_bins_enriched"] = (
+        (result["bin1_vs_unsorted_enrichment"] >= top_hit_min_enrichment)
+        & (result["bin2_vs_unsorted_enrichment"] >= top_hit_min_enrichment)
+    )
+    top15_rank_values = result["top15_vs_unsorted_log2_enrichment"].where(
+        result["top15_read_support_pass"]
+    )
+    result["top15_rank"] = top15_rank_values.rank(ascending=False, method="average")
+    top15_rank_n = int(top15_rank_values.notna().sum())
+    if top15_rank_n > 1:
+        result["top15_percentile"] = 100 * (
+            1 - (result["top15_rank"] - 1) / (top15_rank_n - 1)
+        )
+    elif top15_rank_n == 1:
+        result["top15_percentile"] = np.where(top15_rank_values.notna(), 100.0, np.nan)
+    else:
+        result["top15_percentile"] = np.nan
+    result["top15_above_comparator"] = (
+        result["top15_vs_unsorted_enrichment"] > top_hit_min_enrichment
+    )
     result["high_confidence_candidate_flag"] = (
         result["strict_coverage_pass"]
         & result["high_candidate_flag"]
@@ -544,6 +622,12 @@ def analyze(
         reference_score = float(reference["expected_bin_score"])
         reference_high15 = float(reference["high15_probability"])
         reference_high15_enrichment = float(reference["high15_enrichment"])
+        reference_top15_unsorted_enrichment = float(
+            reference["top15_vs_unsorted_enrichment"]
+        )
+        reference_top15_unsorted_log2 = float(
+            reference["top15_vs_unsorted_log2_enrichment"]
+        )
         result.loc[reference_variant_id, "is_reference_variant"] = True
         result["reference_display_label"] = reference_label or reference_variant_id
         result["reference_expected_bin_score"] = reference_score
@@ -564,12 +648,33 @@ def analyze(
             result["score_above_reference"]
             & (result["delta_high15_probability_vs_reference"] > 0)
         )
+        result["reference_top15_vs_unsorted_enrichment"] = (
+            reference_top15_unsorted_enrichment
+        )
+        result["reference_top15_vs_unsorted_log2_enrichment"] = (
+            reference_top15_unsorted_log2
+        )
+        result["delta_top15_log2_enrichment_vs_reference"] = (
+            result["top15_vs_unsorted_log2_enrichment"]
+            - reference_top15_unsorted_log2
+        )
+        result["top15_enrichment_fold_vs_reference"] = (
+            result["top15_vs_unsorted_enrichment"]
+            / reference_top15_unsorted_enrichment
+            if reference_top15_unsorted_enrichment > 0
+            else np.nan
+        )
+        result["top15_above_comparator"] = (
+            result["delta_top15_log2_enrichment_vs_reference"] > 0
+        )
         reference_summary.update(
             {
                 "reference_pass_coverage": True,
                 "reference_expected_bin_score": reference_score,
                 "reference_high15_probability": reference_high15,
                 "reference_high15_enrichment": reference_high15_enrichment,
+                "reference_top15_vs_unsorted_enrichment": reference_top15_unsorted_enrichment,
+                "reference_top15_vs_unsorted_log2_enrichment": reference_top15_unsorted_log2,
                 "reference_estimated_rank": float(reference["estimated_rank"]),
                 "reference_expression_percentile": float(reference["expression_percentile"]),
                 "variants_with_score_above_reference": int(
@@ -587,6 +692,15 @@ def analyze(
             }
         )
 
+    result["top15_candidate_flag"] = (
+        result["top15_read_support_pass"]
+        & result["top15_both_bins_enriched"]
+        & result["top15_above_comparator"]
+    )
+    result["top15_priority_candidate_flag"] = (
+        result["top15_candidate_flag"] & ~result["single_bin_jackpot_suspect"]
+    )
+
     result = result.reset_index().sort_values(
         ["pass_coverage", "estimated_rank"], ascending=[False, True], na_position="last"
     )
@@ -601,6 +715,16 @@ def analyze(
         "high5_probability",
         "high15_probability",
         "high15_enrichment",
+        "bin1_vs_unsorted_enrichment",
+        "bin2_vs_unsorted_enrichment",
+        "top15_vs_unsorted_enrichment",
+        "top15_vs_unsorted_log2_enrichment",
+        "top15_read_support_pass",
+        "top15_both_bins_enriched",
+        "top15_rank",
+        "top15_percentile",
+        "top15_candidate_flag",
+        "top15_priority_candidate_flag",
         "most_enriched_bin",
         "gate_entry_probability_capped",
         "estimated_rank",
@@ -625,6 +749,8 @@ def analyze(
                 "high15_fold_vs_reference",
                 "score_above_reference",
                 "score_and_high15_above_reference",
+                "delta_top15_log2_enrichment_vs_reference",
+                "top15_enrichment_fold_vs_reference",
             ]
         )
     if "expected_log10_mfi" in result.columns:
@@ -660,6 +786,17 @@ def analyze(
         "high_confidence_candidate_count": int(
             result["high_confidence_candidate_flag"].sum()
         ),
+        "top15_read_support_passing_count": int(
+            result["top15_read_support_pass"].sum()
+        ),
+        "top15_candidate_count": int(result["top15_candidate_flag"].sum()),
+        "top15_priority_candidate_count": int(
+            result["top15_priority_candidate_flag"].sum()
+        ),
+        "top_hit_min_unsorted_count": top_hit_min_unsorted_count,
+        "top_hit_min_total_bin_count": top_hit_min_total_bin_count,
+        "top_hit_min_high_bin_count": top_hit_min_high_bin_count,
+        "top_hit_min_enrichment": top_hit_min_enrichment,
         "median_unsorted_count": median_unsorted_count,
         "median_total_6bin_count": median_total_bin_count,
         "strict_unsorted_cutoff": strict_unsorted_cutoff,
@@ -971,6 +1108,10 @@ def main() -> int:
         args.strict_min_detected_bins,
         args.jackpot_max_bin_probability,
         args.jackpot_max_detected_bins,
+        args.top_hit_min_unsorted_count,
+        args.top_hit_min_total_bin_count,
+        args.top_hit_min_high_bin_count,
+        args.top_hit_min_enrichment,
     )
     plots = make_plots(args.outdir, sample_qc, result, args.id_column, args.top_n)
     report = write_report(args.outdir, sample_qc, essential, summary, plots, args.id_column)
@@ -986,6 +1127,52 @@ def main() -> int:
     result[result["high_confidence_candidate_flag"]].to_csv(
         args.outdir / "high_confidence_candidates.tsv", sep="\t", index=False
     )
+    top15_export_columns = [
+        args.id_column,
+        "top15_rank",
+        "top15_percentile",
+        "top15_vs_unsorted_enrichment",
+        "top15_vs_unsorted_log2_enrichment",
+        "bin1_vs_unsorted_enrichment",
+        "bin2_vs_unsorted_enrichment",
+        "unsorted_count",
+        "total_6bin_count",
+        "high_bin_raw_count",
+        "detected_in_n_bins",
+        "expected_bin_score",
+        "high15_probability",
+        "top15_both_bins_enriched",
+        "single_bin_jackpot_suspect",
+        "top15_candidate_flag",
+        "top15_priority_candidate_flag",
+        "is_reference_variant",
+    ]
+    if reference_variant_id is not None:
+        top15_export_columns.extend(
+            [
+                "reference_display_label",
+                "delta_top15_log2_enrichment_vs_reference",
+                "top15_enrichment_fold_vs_reference",
+            ]
+        )
+    top15_ranking = result.loc[
+        result["top15_read_support_pass"], top15_export_columns
+    ].sort_values("top15_rank", ascending=True, na_position="last")
+    top15_ranking.to_csv(
+        args.outdir / "top15_enrichment_ranking.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    top15_ranking[top15_ranking["top15_candidate_flag"]].to_csv(
+        args.outdir / "top15_candidates.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    top15_ranking[top15_ranking["top15_priority_candidate_flag"]].to_csv(
+        args.outdir / "top15_priority_candidates.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
     if reference_variant_id is not None:
         comparison_columns = [
             args.id_column,
@@ -995,6 +1182,15 @@ def main() -> int:
             "expected_bin_score",
             "delta_score_vs_reference",
             "high15_probability",
+            "top15_vs_unsorted_enrichment",
+            "top15_vs_unsorted_log2_enrichment",
+            "delta_top15_log2_enrichment_vs_reference",
+            "top15_enrichment_fold_vs_reference",
+            "bin1_vs_unsorted_enrichment",
+            "bin2_vs_unsorted_enrichment",
+            "top15_rank",
+            "top15_candidate_flag",
+            "top15_priority_candidate_flag",
             "delta_high15_probability_vs_reference",
             "high15_fold_vs_reference",
             "estimated_rank",
