@@ -59,6 +59,13 @@ NESTED_WORKER_THREADS="${NESTED_WORKER_THREADS:-1}"
 OVERALL_GATE_FRACTION="${OVERALL_GATE_FRACTION:-0.90}"
 MIN_UNSORTED_COUNT="${MIN_UNSORTED_COUNT:-50}"
 MIN_TOTAL_BIN_COUNT="${MIN_TOTAL_BIN_COUNT:-100}"
+STRICT_MIN_UNSORTED_COUNT="${STRICT_MIN_UNSORTED_COUNT:-1000}"
+STRICT_MIN_TOTAL_BIN_COUNT="${STRICT_MIN_TOTAL_BIN_COUNT:-5000}"
+STRICT_RELATIVE_MEDIAN_FRACTION="${STRICT_RELATIVE_MEDIAN_FRACTION:-0.10}"
+STRICT_MIN_HIGH_BIN_COUNT="${STRICT_MIN_HIGH_BIN_COUNT:-200}"
+STRICT_MIN_DETECTED_BINS="${STRICT_MIN_DETECTED_BINS:-3}"
+JACKPOT_MAX_BIN_PROBABILITY="${JACKPOT_MAX_BIN_PROBABILITY:-0.85}"
+JACKPOT_MAX_DETECTED_BINS="${JACKPOT_MAX_DETECTED_BINS:-2}"
 REFERENCE_VARIANT_ID="${REFERENCE_VARIANT_ID:-auto}"
 
 # Multiprocessing stages own the parallelism. Prevent BLAS/OpenMP libraries
@@ -459,6 +466,13 @@ run_analyze() {
     --overall-gate-fraction "${OVERALL_GATE_FRACTION}" \
     --min-unsorted-count "${MIN_UNSORTED_COUNT}" \
     --min-total-bin-count "${MIN_TOTAL_BIN_COUNT}" \
+    --strict-min-unsorted-count "${STRICT_MIN_UNSORTED_COUNT}" \
+    --strict-min-total-bin-count "${STRICT_MIN_TOTAL_BIN_COUNT}" \
+    --strict-relative-median-fraction "${STRICT_RELATIVE_MEDIAN_FRACTION}" \
+    --strict-min-high-bin-count "${STRICT_MIN_HIGH_BIN_COUNT}" \
+    --strict-min-detected-bins "${STRICT_MIN_DETECTED_BINS}" \
+    --jackpot-max-bin-probability "${JACKPOT_MAX_BIN_PROBABILITY}" \
+    --jackpot-max-detected-bins "${JACKPOT_MAX_DETECTED_BINS}" \
     --reference-variant-id "${REFERENCE_VARIANT_ID}"
   stage_complete
 }

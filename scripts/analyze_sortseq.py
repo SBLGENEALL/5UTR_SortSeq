@@ -53,6 +53,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pseudocount", type=float, default=0.5)
     parser.add_argument("--min-unsorted-count", type=int, default=50)
     parser.add_argument("--min-total-bin-count", type=int, default=100)
+    parser.add_argument("--strict-min-unsorted-count", type=int, default=1000)
+    parser.add_argument("--strict-min-total-bin-count", type=int, default=5000)
+    parser.add_argument("--strict-relative-median-fraction", type=float, default=0.10)
+    parser.add_argument("--strict-min-high-bin-count", type=int, default=200)
+    parser.add_argument("--strict-min-detected-bins", type=int, default=3)
+    parser.add_argument("--jackpot-max-bin-probability", type=float, default=0.85)
+    parser.add_argument("--jackpot-max-detected-bins", type=int, default=2)
     parser.add_argument("--overall-gate-fraction", type=float, default=0.90)
     parser.add_argument("--top-n", type=int, default=50)
     parser.add_argument(
@@ -292,11 +299,30 @@ def analyze(
     overall_gate_fraction: float,
     reference_variant_id: str | None = None,
     reference_label: str | None = None,
+    strict_min_unsorted_count: int = 1000,
+    strict_min_total_bin_count: int = 5000,
+    strict_relative_median_fraction: float = 0.10,
+    strict_min_high_bin_count: int = 200,
+    strict_min_detected_bins: int = 3,
+    jackpot_max_bin_probability: float = 0.85,
+    jackpot_max_detected_bins: int = 2,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     if pseudocount <= 0:
         raise ValueError("pseudocount must be positive")
     if not 0 < overall_gate_fraction <= 1:
         raise ValueError("overall_gate_fraction must be between 0 and 1")
+    if strict_min_unsorted_count < 0 or strict_min_total_bin_count < 0:
+        raise ValueError("strict count cutoffs cannot be negative")
+    if not 0 <= strict_relative_median_fraction <= 1:
+        raise ValueError("strict_relative_median_fraction must be between 0 and 1")
+    if strict_min_high_bin_count < 0:
+        raise ValueError("strict_min_high_bin_count cannot be negative")
+    if not 1 <= strict_min_detected_bins <= 6:
+        raise ValueError("strict_min_detected_bins must be between 1 and 6")
+    if not 0 < jackpot_max_bin_probability <= 1:
+        raise ValueError("jackpot_max_bin_probability must be between 0 and 1")
+    if not 1 <= jackpot_max_detected_bins <= 6:
+        raise ValueError("jackpot_max_detected_bins must be between 1 and 6")
 
     bins = samples[samples["sample_type"].eq("bin")].sort_values("bin_number")
     bin_ids = bins["sample_id"].astype(str).tolist()
@@ -448,6 +474,58 @@ def analyze(
         & (result["high15_enrichment"] >= 1.5)
     )
 
+    # Strict candidate-confidence filter. The fixed floors prevent sparse reads
+    # from dominating the score, while the median-relative term scales with the
+    # sequencing depth of each experiment. This is intentionally separate from
+    # the permissive pass_coverage filter used to preserve the full exploration
+    # table.
+    median_unsorted_count = float(raw_unsorted.median())
+    median_total_bin_count = float(total_bin_count.median())
+    strict_unsorted_cutoff = max(
+        int(strict_min_unsorted_count),
+        int(round(strict_relative_median_fraction * median_unsorted_count)),
+    )
+    strict_total_bin_cutoff = max(
+        int(strict_min_total_bin_count),
+        int(round(strict_relative_median_fraction * median_total_bin_count)),
+    )
+    result["high_bin_raw_count"] = raw_bins.iloc[:, :2].sum(axis=1)
+    result["maximum_bin_probability"] = bin_probability.max(axis=1)
+    result["strict_unsorted_cutoff"] = strict_unsorted_cutoff
+    result["strict_total_6bin_cutoff"] = strict_total_bin_cutoff
+    result["strict_coverage_pass"] = (
+        (result["unsorted_count"] >= strict_unsorted_cutoff)
+        & (result["total_6bin_count"] >= strict_total_bin_cutoff)
+        & (result["high_bin_raw_count"] >= strict_min_high_bin_count)
+        & (result["detected_in_n_bins"] >= strict_min_detected_bins)
+    )
+    result["single_bin_jackpot_suspect"] = (
+        (result["maximum_bin_probability"] >= jackpot_max_bin_probability)
+        & (result["detected_in_n_bins"] <= jackpot_max_detected_bins)
+    )
+    result["high_confidence_candidate_flag"] = (
+        result["strict_coverage_pass"]
+        & result["high_candidate_flag"]
+        & ~result["single_bin_jackpot_suspect"]
+    )
+
+    strict_scores = result["expected_bin_score"].where(result["strict_coverage_pass"])
+    result["strict_estimated_rank"] = strict_scores.rank(ascending=False, method="average")
+    strict_n = int(strict_scores.notna().sum())
+    if strict_n > 1:
+        result["strict_expression_percentile"] = 100 * (
+            1 - (result["strict_estimated_rank"] - 1) / (strict_n - 1)
+        )
+    elif strict_n == 1:
+        result["strict_expression_percentile"] = np.where(
+            strict_scores.notna(), 100.0, np.nan
+        )
+    else:
+        result["strict_expression_percentile"] = np.nan
+    result["strict_expression_tier"] = result["strict_expression_percentile"].map(
+        percentile_tier
+    )
+
     reference_summary: dict[str, object] = {
         "reference_variant_id": reference_variant_id,
         "reference_display_label": reference_label,
@@ -529,6 +607,14 @@ def analyze(
         "expression_percentile",
         "expression_tier",
         "high_candidate_flag",
+        "strict_coverage_pass",
+        "high_bin_raw_count",
+        "maximum_bin_probability",
+        "single_bin_jackpot_suspect",
+        "strict_estimated_rank",
+        "strict_expression_percentile",
+        "strict_expression_tier",
+        "high_confidence_candidate_flag",
     ]
     if reference_variant_id is not None:
         essential_columns.extend(
@@ -567,6 +653,21 @@ def analyze(
         "reference_variants": int(len(variants)),
         "variants_passing_coverage": int(pass_coverage.sum()),
         "high_candidate_count": int(result["high_candidate_flag"].sum()),
+        "strict_coverage_passing_count": int(result["strict_coverage_pass"].sum()),
+        "single_bin_jackpot_suspect_count": int(
+            result["single_bin_jackpot_suspect"].sum()
+        ),
+        "high_confidence_candidate_count": int(
+            result["high_confidence_candidate_flag"].sum()
+        ),
+        "median_unsorted_count": median_unsorted_count,
+        "median_total_6bin_count": median_total_bin_count,
+        "strict_unsorted_cutoff": strict_unsorted_cutoff,
+        "strict_total_6bin_cutoff": strict_total_bin_cutoff,
+        "strict_min_high_bin_count": strict_min_high_bin_count,
+        "strict_min_detected_bins": strict_min_detected_bins,
+        "jackpot_max_bin_probability": jackpot_max_bin_probability,
+        "jackpot_max_detected_bins": jackpot_max_detected_bins,
         "neutral_baseline_score": baseline_score,
         "population_fraction_source": fraction_source,
         "overall_gate_fraction": overall_gate_fraction,
@@ -808,13 +909,16 @@ figure{{margin:20px 0}} code{{background:#f2f2f2;padding:2px 4px}}
 <div class="box"><b>한 줄 해석</b>: 각 UTR의 reads를 sample depth로 나눈 뒤 bin 크기를 곱해,
 그 UTR 세포가 bin1–6에 어떻게 분포하는지 복원했습니다. bin1은 최고 mCherry, bin6은 최저 mCherry-positive입니다.</div>
 <p>Reference UTR: {summary['reference_variants']:,}; coverage 통과: {summary['variants_passing_coverage']:,};
-high-candidate heuristic 통과: {summary['high_candidate_count']:,}</p>
+high-candidate heuristic 통과: {summary['high_candidate_count']:,};
+strict coverage 통과: {summary['strict_coverage_passing_count']:,};
+high-confidence 후보: {summary['high_confidence_candidate_count']:,}</p>
 {reference_html}
 <h2>결과를 읽는 순서</h2><ol>
 <li><code>pass_coverage</code>가 TRUE인 UTR만 봅니다.</li>
 <li><code>expected_bin_score</code>와 <code>expression_tier</code>로 전체적인 high/mid/low 위치를 봅니다.</li>
 <li><code>high15_enrichment</code>가 1보다 크면 bin1+2에 평균보다 많이 있습니다.</li>
 <li><code>bin1_probability</code>–<code>bin6_probability</code>로 분포가 자연스러운지 확인합니다.</li>
+<li>최종 후보는 <code>strict_coverage_pass</code>와 <code>high_confidence_candidate_flag</code>를 확인합니다.</li>
 </ol>
 <div class="box warn"><b>주의</b>: biological replicate가 없는 한 이것은 후보 선별용 추정 순위입니다.
 정확한 1–2,000등이나 FDR 유의성으로 해석하지 마세요. mCherry fluorescence는 translation rate의 직접 측정값이 아닙니다.</div>
@@ -860,6 +964,13 @@ def main() -> int:
         args.overall_gate_fraction,
         reference_variant_id,
         reference_label,
+        args.strict_min_unsorted_count,
+        args.strict_min_total_bin_count,
+        args.strict_relative_median_fraction,
+        args.strict_min_high_bin_count,
+        args.strict_min_detected_bins,
+        args.jackpot_max_bin_probability,
+        args.jackpot_max_detected_bins,
     )
     plots = make_plots(args.outdir, sample_qc, result, args.id_column, args.top_n)
     report = write_report(args.outdir, sample_qc, essential, summary, plots, args.id_column)
@@ -868,6 +979,12 @@ def main() -> int:
     essential.to_csv(args.outdir / "utr_results_easy.tsv", sep="\t", index=False)
     essential[essential["high_candidate_flag"]].to_csv(
         args.outdir / "high_candidates.tsv", sep="\t", index=False
+    )
+    result[result["strict_coverage_pass"]].to_csv(
+        args.outdir / "strict_coverage_results.tsv", sep="\t", index=False
+    )
+    result[result["high_confidence_candidate_flag"]].to_csv(
+        args.outdir / "high_confidence_candidates.tsv", sep="\t", index=False
     )
     if reference_variant_id is not None:
         comparison_columns = [
@@ -884,6 +1001,11 @@ def main() -> int:
             "expression_percentile",
             "expression_tier",
             "high_candidate_flag",
+            "strict_coverage_pass",
+            "single_bin_jackpot_suspect",
+            "strict_estimated_rank",
+            "strict_expression_percentile",
+            "high_confidence_candidate_flag",
             "is_reference_variant",
             "reference_display_label",
         ]

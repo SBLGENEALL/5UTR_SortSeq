@@ -330,6 +330,8 @@ bash run_pipeline.sh analyze 2>&1 | tee \
 results/sortseq/utr_results_easy.tsv
 results/sortseq/utr_results_full.tsv
 results/sortseq/high_candidates.tsv
+results/sortseq/strict_coverage_results.tsv
+results/sortseq/high_confidence_candidates.tsv
 results/sortseq/easy_report.html
 ```
 
@@ -342,6 +344,17 @@ results/sortseq/easy_report.html
 5. `most_enriched_bin`과 bin1–6 probability 분포
 6. `expression_tier`: 정확한 개별 등수보다 top 1/5/10% tier 중심
 7. whole unsorted 대비 target-gate representation은 보조 QC로 사용
+
+최종 hit 목록은 permissive `pass_coverage`가 아니라 다음 strict filter를 추가로
+통과한 UTR를 사용합니다.
+
+```text
+unsorted >= max(1,000, 전체 중앙값의 10%)
+total six bins >= max(5,000, 전체 중앙값의 10%)
+bin1 + bin2 raw support >= 200
+3개 이상의 bin에서 검출
+single-bin jackpot suspect 제외
+```
 
 Whole unsorted는 별도 기준 sample이므로 `population_fraction`을 비워 둡니다.
 주 fluorescence score는 6개 bin 내부 분포에서 계산합니다.
@@ -372,7 +385,17 @@ results/sortseq/figures/04_top_utr_bin_heatmap.png
 results/sortseq/figures/05_expression_tiers.png
 results/sortseq/figures/06_unsorted_vs_target_gate.png
 results/sortseq/figures/sortseq_qc_figures.pdf
+results/sortseq/figures/strict/08_strict_score_vs_high15_enrichment.png
+results/sortseq/figures/strict/09_strict_top_utr_bin_probability_heatmap.png
+results/sortseq/figures/strict/10_strict_top_utr_bin_enrichment_heatmap.png
+results/sortseq/figures/strict/11_strict_unsorted_vs_target_gate.png
+results/sortseq/figures/strict/12_strict_reference_score_position.png
+results/sortseq/figures/strict/strict_candidate_figures.pdf
 ```
+
+09번은 절대 cell fraction이고, 10번은 `log2(probability / bin fraction)`입니다.
+따라서 bin3처럼 원래 더 큰 bin이 09번에서 밝게 보이더라도, 10번에서는 실제 상대
+농축이 bin1 또는 bin2인지 바로 확인할 수 있습니다.
 
 ## 중단 후 재개하는 방법
 

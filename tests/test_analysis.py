@@ -111,6 +111,31 @@ class EasyPipelineTests(unittest.TestCase):
         neutral = result.set_index("variant_id").loc["neutral"]
         self.assertAlmostEqual(neutral["gate_entry_probability_raw"], 0.90, delta=0.001)
 
+    def test_strict_filter_separates_sparse_from_supported_candidates(self):
+        variants, samples, counts = self.make_inputs()
+        result, _, summary = MODULE.analyze(
+            variants,
+            samples,
+            counts,
+            "variant_id",
+            0.5,
+            0,
+            0,
+            0.90,
+            strict_min_unsorted_count=300,
+            strict_min_total_bin_count=5000,
+            strict_relative_median_fraction=0.0,
+            strict_min_high_bin_count=200,
+            strict_min_detected_bins=3,
+        )
+        indexed = result.set_index("variant_id")
+        self.assertTrue(indexed.loc["high", "strict_coverage_pass"])
+        self.assertFalse(indexed.loc["neutral", "strict_coverage_pass"])
+        self.assertTrue(indexed.loc["high", "high_confidence_candidate_flag"])
+        self.assertEqual(summary["strict_unsorted_cutoff"], 300)
+        self.assertEqual(summary["strict_total_6bin_cutoff"], 5000)
+        self.assertGreaterEqual(summary["strict_coverage_passing_count"], 1)
+
     def test_orginal_alias_adds_reference_relative_metrics(self):
         variants, samples, counts = self.make_inputs()
         variants.loc[variants["variant_id"].eq("neutral"), "variant_id"] = "orginal"

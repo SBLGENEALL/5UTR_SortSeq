@@ -114,8 +114,11 @@ results/library_qc/combined/variant_count_matrix.csv
 results/sortseq/utr_results_easy.tsv
 results/sortseq/utr_results_full.tsv
 results/sortseq/high_candidates.tsv
+results/sortseq/strict_coverage_results.tsv
+results/sortseq/high_confidence_candidates.tsv
 results/sortseq/reference_comparison.tsv
 results/sortseq/figures/sortseq_qc_figures.pdf
+results/sortseq/figures/strict/strict_candidate_figures.pdf
 ```
 
 `original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 score 차이와
@@ -129,6 +132,31 @@ bash run_pipeline.sh reanalyze
 
 기존 `results/sortseq`은 `archive/`로 이동되며 raw FASTQ, rescue, LibraryQC 결과는
 수정되지 않습니다.
+
+## Strict coverage와 최종 후보 그림
+
+기본 `pass_coverage`는 전체 탐색표를 보존하기 위한 느슨한 기준입니다. 최종 후보에는
+다음 strict filter가 추가로 적용됩니다.
+
+```text
+unsorted count >= max(1,000, 전체 UTR 중앙값의 10%)
+total six-bin count >= max(5,000, 전체 UTR 중앙값의 10%)
+bin1 + bin2 raw count >= 200
+검출 bin 수 >= 3
+한두 bin에 probability 85% 이상 집중된 경우 jackpot 의심 표시
+```
+
+`bash run_pipeline.sh analyze`는 `strict_coverage_results.tsv`와
+`high_confidence_candidates.tsv`를 만듭니다. R 환경에서 `bash run_pipeline.sh plot`을
+실행하면 기존 그림을 유지하면서 `figures/strict/` 아래에 strict 후보용 그림과 PDF를
+추가합니다. 사용자가 서버에서 이미 `high_confidence_candidates.tsv`를 만든 경우에는
+analyze를 다시 실행하지 않고 plot만 실행해도 됩니다.
+
+특히 두 heatmap을 구분해서 봅니다.
+
+- `09_strict_top_utr_bin_probability_heatmap.png`: UTR별 절대 bin probability
+- `10_strict_top_utr_bin_enrichment_heatmap.png`: `log2(probability / bin fraction)`;
+  bin 크기를 기준으로 상대 농축된 곳은 빨강, depletion된 곳은 파랑
 
 전체 흐름은 [docs/PIPELINE_WORKFLOW_KO.md](docs/PIPELINE_WORKFLOW_KO.md),
 서버 설정은 [docs/SERVER_GUIDE_KO.md](docs/SERVER_GUIDE_KO.md), 결과 해석은

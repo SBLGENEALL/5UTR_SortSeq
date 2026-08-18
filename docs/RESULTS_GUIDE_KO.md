@@ -66,6 +66,32 @@ bash run_pipeline.sh reanalyze
 
 `gate_entry_probability_raw > 1`은 실제 확률이 100%를 넘었다는 뜻이 아니라 composition/PCR/sampling 차이를 확인하라는 QC 신호입니다.
 
+## Strict coverage와 low-count 과대평가 방지
+
+`pass_coverage`의 기본값(`unsorted >= 50`, `total six bins >= 100`)은 탐색 결과를
+최대한 보존하기 위한 최소 기준입니다. 최종 hit에는 다음 strict 기준을 사용합니다.
+
+| 열 | 기본 기준 |
+|---|---:|
+| `unsorted_count` | `max(1,000, 중앙값의 10%)` 이상 |
+| `total_6bin_count` | `max(5,000, 중앙값의 10%)` 이상 |
+| `high_bin_raw_count` | 200 이상 |
+| `detected_in_n_bins` | 3 이상 |
+
+`strict_coverage_pass=TRUE`이면서 기존 high-score/high15 조건을 통과하고,
+`single_bin_jackpot_suspect=FALSE`인 UTR만
+`high_confidence_candidate_flag=TRUE`가 됩니다. 결과는 다음 파일에 기록됩니다.
+
+```text
+results/sortseq/strict_coverage_results.tsv
+results/sortseq/high_confidence_candidates.tsv
+```
+
+R 그림은 `results/sortseq/figures/strict/`에 생성됩니다. Probability heatmap은 절대
+세포분율이므로 큰 bin이 밝게 보일 수 있습니다. Enrichment heatmap은
+`log2(probability / population fraction)`을 사용하므로 bin1–6의 서로 다른 크기를
+제거하고 어느 bin에 상대적으로 농축됐는지 보여줍니다.
+
 ## 결론 문구
 
 biological replicate가 하나라면 다음 수준이 타당합니다.

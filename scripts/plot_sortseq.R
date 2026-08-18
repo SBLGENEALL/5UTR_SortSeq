@@ -37,6 +37,7 @@ if (!file.exists(full_path) || !file.exists(sample_qc_path)) {
 }
 results <- read_tsv(full_path)
 sample_qc <- read_tsv(sample_qc_path)
+results$variant_id <- as.character(results$variant_id)
 
 required_result_columns <- c(
   "variant_id", "pass_coverage", "expected_bin_score", "high15_enrichment",
@@ -49,23 +50,31 @@ if (length(missing_result_columns) > 0) {
 }
 for (column in c(
   "expected_bin_score", "high15_enrichment", "estimated_rank",
-  "unsorted_frequency", "reconstructed_gate_frequency",
+  "high15_probability", "unsorted_frequency", "reconstructed_gate_frequency",
+  "unsorted_count", "total_6bin_count", "detected_in_n_bins",
+  paste0("bin", 1:6, "_count"),
   paste0("bin", 1:6, "_probability")
 )) {
   results[[column]] <- suppressWarnings(as.numeric(results[[column]]))
 }
+as_bool <- function(values) {
+  tolower(as.character(values)) %in% c("true", "t", "1")
+}
 results$pass_coverage <- tolower(as.character(results$pass_coverage)) %in% c("true", "t", "1")
+if ("high_candidate_flag" %in% colnames(results)) {
+  results$high_candidate_flag <- as_bool(results$high_candidate_flag)
+}
+if ("is_reference_variant" %in% colnames(results)) {
+  results$is_reference_variant <- as_bool(results$is_reference_variant)
+} else {
+  results$is_reference_variant <- tolower(trimws(results$variant_id)) %in% c("original", "orginal")
+}
+if (!("reference_display_label" %in% colnames(results))) {
+  results$reference_display_label <- results$variant_id
+}
 passing <- results[results$pass_coverage & is.finite(results$expected_bin_score), , drop = FALSE]
 if (nrow(passing) == 0) {
   stop("No UTR passed the coverage filter.")
-}
-if ("is_reference_variant" %in% colnames(passing)) {
-  passing$is_reference_variant <- tolower(as.character(passing$is_reference_variant)) %in% c("true", "t", "1")
-} else {
-  passing$is_reference_variant <- tolower(trimws(passing$variant_id)) %in% c("original", "orginal")
-}
-if (!("reference_display_label" %in% colnames(passing))) {
-  passing$reference_display_label <- passing$variant_id
 }
 reference <- passing[passing$is_reference_variant, , drop = FALSE]
 if (nrow(reference) > 1) {
@@ -371,6 +380,304 @@ if (nrow(reference) == 1) {
     theme_sortseq()
   save_png("07_reference_score_position.png", p_reference)
   plots[[length(plots) + 1]] <- p_reference
+}
+
+# Strict-candidate figures. These are generated when either the v0.1.5 strict
+# flags are present in the full result or a server-local
+# high_confidence_candidates.tsv was created with the documented filter.
+strict_candidate_path <- file.path(sortseq_dir, "high_confidence_candidates.tsv")
+strict_candidate_ids <- character(0)
+if (file.exists(strict_candidate_path)) {
+  strict_candidate_file <- read_tsv(strict_candidate_path)
+  if ("variant_id" %in% colnames(strict_candidate_file)) {
+    strict_candidate_ids <- unique(as.character(strict_candidate_file$variant_id))
+  }
+} else if ("high_confidence_candidate_flag" %in% colnames(results)) {
+  strict_candidate_ids <- as.character(
+    results$variant_id[as_bool(results$high_confidence_candidate_flag)]
+  )
+}
+
+if (length(strict_candidate_ids) > 0) {
+  strict_output_dir <- file.path(output_dir, "strict")
+  dir.create(strict_output_dir, recursive = TRUE, showWarnings = FALSE)
+  save_strict_png <- function(filename, plot, width = 11.8, height = 6.6) {
+    ragg::agg_png(
+      filename = file.path(strict_output_dir, filename), width = width, height = height,
+      units = "in", res = 320, background = "white"
+    )
+    print(plot)
+    grDevices::dev.off()
+  }
+
+  if ("strict_coverage_pass" %in% colnames(results)) {
+    results$strict_coverage_pass <- as_bool(results$strict_coverage_pass)
+    strict_passing <- results[
+      results$strict_coverage_pass & is.finite(results$expected_bin_score),
+      , drop = FALSE
+    ]
+    strict_unsorted_cutoff <- suppressWarnings(max(results$strict_unsorted_cutoff, na.rm = TRUE))
+    strict_total_cutoff <- suppressWarnings(max(results$strict_total_6bin_cutoff, na.rm = TRUE))
+  } else {
+    strict_unsorted_cutoff <- max(1000, round(0.10 * median(results$unsorted_count, na.rm = TRUE)))
+    strict_total_cutoff <- max(5000, round(0.10 * median(results$total_6bin_count, na.rm = TRUE)))
+    high_bin_raw_count <- results$bin1_count + results$bin2_count
+    strict_mask <-
+      results$unsorted_count >= strict_unsorted_cutoff &
+      results$total_6bin_count >= strict_total_cutoff &
+      high_bin_raw_count >= 200 &
+      results$detected_in_n_bins >= 3
+    strict_passing <- results[
+      strict_mask & is.finite(results$expected_bin_score),
+      , drop = FALSE
+    ]
+  }
+  strict_candidates <- results[
+    results$variant_id %in% strict_candidate_ids & is.finite(results$expected_bin_score),
+    , drop = FALSE
+  ]
+  strict_candidates <- strict_candidates[
+    order(strict_candidates$expected_bin_score, decreasing = TRUE),
+    , drop = FALSE
+  ]
+  strict_plots <- list()
+
+  # 08: keep the full passing set as faint context, while the strict universe
+  # and final high-confidence candidates are visually separated.
+  p_strict_score <- ggplot2::ggplot() +
+    ggplot2::geom_hline(yintercept = 1, linetype = "dashed", color = colors[["muted"]]) +
+    ggplot2::geom_point(
+      data = passing,
+      ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
+      color = "#C7CED3", alpha = 0.38, size = 1.25
+    ) +
+    ggplot2::geom_point(
+      data = strict_passing,
+      ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
+      color = colors[["blue"]], alpha = 0.52, size = 1.55
+    ) +
+    ggplot2::geom_point(
+      data = strict_candidates,
+      ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
+      color = colors[["orange"]], alpha = 0.90, size = 2.5
+    ) +
+    ggplot2::labs(
+      title = "Strict-filtered high-confidence 5'UTR candidates",
+      subtitle = sprintf(
+        "Gray = permissive coverage; blue = strict coverage (%s UTRs); orange = final candidates (%s)",
+        scales::comma(nrow(strict_passing)), scales::comma(nrow(strict_candidates))
+      ),
+      caption = sprintf(
+        "Strict raw-count cutoffs: unsorted >= %s; total six bins >= %s; bin1+2 >= 200; detected bins >= 3",
+        scales::comma(strict_unsorted_cutoff), scales::comma(strict_total_cutoff)
+      ),
+      x = "Expected bin score (6 = high, 1 = low)",
+      y = "Top-15% enrichment (bin1 + bin2; 1 = pool average)"
+    ) +
+    theme_sortseq()
+  if (nrow(reference) == 1) {
+    p_strict_score <- p_strict_score +
+      ggplot2::geom_point(
+        data = reference,
+        ggplot2::aes(x = expected_bin_score, y = high15_enrichment),
+        shape = 8, size = 5.2, stroke = 1.2, color = "#B2182B"
+      ) +
+      ggplot2::geom_text(
+        data = reference,
+        ggplot2::aes(
+          x = expected_bin_score, y = high15_enrichment,
+          label = paste0(reference_display_label, " [reference]")
+        ),
+        nudge_x = 0.06, nudge_y = 0.08, hjust = 0,
+        color = "#B2182B", fontface = "bold", size = 3.8
+      )
+  }
+  save_strict_png("08_strict_score_vs_high15_enrichment.png", p_strict_score)
+  strict_plots[[length(strict_plots) + 1]] <- p_strict_score
+
+  # Use the same UTR order for the probability and enrichment heatmaps.
+  top_strict_n <- min(50, nrow(strict_candidates))
+  top_strict <- strict_candidates[seq_len(top_strict_n), , drop = FALSE]
+  strict_reference_added <- FALSE
+  if (nrow(reference) == 1 && !(reference$variant_id[[1]] %in% top_strict$variant_id)) {
+    top_strict <- rbind(top_strict, reference)
+    strict_reference_added <- TRUE
+  }
+  top_strict$display_id <- ifelse(
+    top_strict$is_reference_variant,
+    paste0(top_strict$reference_display_label, " [reference]"),
+    top_strict$variant_id
+  )
+  strict_heat <- do.call(
+    rbind,
+    lapply(seq_len(nrow(top_strict)), function(row_number) {
+      data.frame(
+        variant_id = top_strict$display_id[[row_number]],
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+        probability = as.numeric(top_strict[row_number, probability_columns]),
+        is_reference = top_strict$is_reference_variant[[row_number]],
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  strict_heat$variant_id <- factor(strict_heat$variant_id, levels = rev(top_strict$display_id))
+  p_strict_probability <- ggplot2::ggplot(
+    strict_heat,
+    ggplot2::aes(x = bin, y = variant_id, fill = probability)
+  ) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.15) +
+    ggplot2::scale_fill_gradientn(
+      colors = viridisLite::viridis(256, option = "B"), labels = scales::percent
+    ) +
+    ggplot2::labs(
+      title = sprintf("Top %d high-confidence UTR bin probabilities", top_strict_n),
+      subtitle = if (strict_reference_added) {
+        "Strict candidates plus reference; absolute estimated cell fraction"
+      } else {
+        "Strict candidates; absolute estimated cell fraction"
+      },
+      x = "FACS bin", y = "UTR", fill = "Estimated\ncell fraction"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_text(size = 7.5))
+  if (any(strict_heat$is_reference)) {
+    p_strict_probability <- p_strict_probability + ggplot2::geom_tile(
+      data = strict_heat[strict_heat$is_reference, , drop = FALSE],
+      fill = NA, color = "#B2182B", linewidth = 0.9
+    )
+  }
+  save_strict_png(
+    "09_strict_top_utr_bin_probability_heatmap.png",
+    p_strict_probability, 10.2, max(7.2, nrow(top_strict) * 0.19)
+  )
+  strict_plots[[length(strict_plots) + 1]] <- p_strict_probability
+
+  # Relative enrichment removes the visual advantage of wider bins. A value
+  # of zero means p(bin|UTR) equals the sorter population fraction.
+  sample_input_path <- file.path(sortseq_dir, "input", "samples.tsv")
+  default_bin_fraction <- c(0.05, 0.10, 0.15, 0.20, 0.30, 0.20)
+  bin_fraction <- default_bin_fraction
+  if (file.exists(sample_input_path)) {
+    sample_input <- read_tsv(sample_input_path)
+    sample_bins <- sample_input[tolower(sample_input$sample_type) == "bin", , drop = FALSE]
+    sample_bins <- sample_bins[order(as.numeric(sample_bins$bin_number)), , drop = FALSE]
+    loaded_fraction <- suppressWarnings(as.numeric(sample_bins$population_fraction))
+    if (length(loaded_fraction) == 6 && all(is.finite(loaded_fraction)) && all(loaded_fraction > 0)) {
+      bin_fraction <- loaded_fraction / sum(loaded_fraction)
+    }
+  }
+  strict_heat$bin_fraction <- bin_fraction[as.integer(strict_heat$bin)]
+  strict_heat$log2_enrichment <- log2(
+    pmax(strict_heat$probability, 1e-9) / strict_heat$bin_fraction
+  )
+  p_strict_enrichment <- ggplot2::ggplot(
+    strict_heat,
+    ggplot2::aes(x = bin, y = variant_id, fill = log2_enrichment)
+  ) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.15) +
+    ggplot2::scale_fill_gradient2(
+      low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0,
+      limits = c(-3, 3), oob = scales::squish
+    ) +
+    ggplot2::labs(
+      title = sprintf("Top %d high-confidence UTR bin enrichment", top_strict_n),
+      subtitle = "log2(probability / sorter-bin fraction); red = enriched, blue = depleted",
+      x = "FACS bin", y = "UTR", fill = "log2\nbin enrichment"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_text(size = 7.5))
+  if (any(strict_heat$is_reference)) {
+    p_strict_enrichment <- p_strict_enrichment + ggplot2::geom_tile(
+      data = strict_heat[strict_heat$is_reference, , drop = FALSE],
+      fill = NA, color = "#111111", linewidth = 0.9
+    )
+  }
+  save_strict_png(
+    "10_strict_top_utr_bin_enrichment_heatmap.png",
+    p_strict_enrichment, 10.2, max(7.2, nrow(top_strict) * 0.19)
+  )
+  strict_plots[[length(strict_plots) + 1]] <- p_strict_enrichment
+
+  p_strict_gate <- ggplot2::ggplot() +
+    ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = colors[["muted"]]) +
+    ggplot2::geom_point(
+      data = composition,
+      ggplot2::aes(x = unsorted_frequency, y = reconstructed_gate_frequency),
+      color = "#C7CED3", alpha = 0.35, size = 1.2
+    ) +
+    ggplot2::geom_point(
+      data = strict_candidates,
+      ggplot2::aes(x = unsorted_frequency, y = reconstructed_gate_frequency),
+      color = colors[["orange"]], alpha = 0.88, size = 2.5
+    ) +
+    ggplot2::scale_x_log10(labels = scales::label_scientific()) +
+    ggplot2::scale_y_log10(labels = scales::label_scientific()) +
+    ggplot2::labs(
+      title = "High-confidence candidates in the target gate",
+      subtitle = "Gray = all coverage-passing UTRs; orange = strict high-confidence candidates",
+      x = "UTR frequency in whole unsorted",
+      y = "Reconstructed UTR frequency in target gate"
+    ) +
+    theme_sortseq()
+  if (nrow(reference_composition) == 1) {
+    p_strict_gate <- p_strict_gate + ggplot2::geom_point(
+      data = reference_composition,
+      ggplot2::aes(x = unsorted_frequency, y = reconstructed_gate_frequency),
+      shape = 8, size = 5.2, stroke = 1.2, color = "#B2182B"
+    )
+  }
+  save_strict_png("11_strict_unsorted_vs_target_gate.png", p_strict_gate)
+  strict_plots[[length(strict_plots) + 1]] <- p_strict_gate
+
+  if (nrow(reference) == 1 && nrow(strict_passing) > 0) {
+    p_strict_reference <- ggplot2::ggplot(
+      strict_passing,
+      ggplot2::aes(x = expected_bin_score)
+    ) +
+      ggplot2::geom_histogram(bins = 45, fill = colors[["sky"]], color = "white") +
+      ggplot2::geom_vline(
+        xintercept = reference$expected_bin_score[[1]],
+        color = "#B2182B", linewidth = 1.2, linetype = "dashed"
+      ) +
+      ggplot2::labs(
+        title = "Reference position after strict coverage filtering",
+        subtitle = sprintf(
+          "%s strict-coverage UTRs; red line = original/orginal",
+          scales::comma(nrow(strict_passing))
+        ),
+        x = "Expected bin score", y = "Strict-coverage UTRs"
+      ) +
+      theme_sortseq()
+    save_strict_png("12_strict_reference_score_position.png", p_strict_reference)
+    strict_plots[[length(strict_plots) + 1]] <- p_strict_reference
+  }
+
+  strict_statistics <- data.frame(
+    metric = c(
+      "strict_unsorted_cutoff", "strict_total_6bin_cutoff",
+      "strict_coverage_passing_utr", "high_confidence_candidate_count"
+    ),
+    value = c(
+      strict_unsorted_cutoff, strict_total_cutoff,
+      nrow(strict_passing), nrow(strict_candidates)
+    ),
+    stringsAsFactors = FALSE
+  )
+  write.csv(
+    strict_statistics,
+    file.path(strict_output_dir, "strict_plot_statistics.csv"),
+    quote = FALSE, row.names = FALSE
+  )
+  grDevices::pdf(
+    file.path(strict_output_dir, "strict_candidate_figures.pdf"),
+    width = 13.333, height = 7.5, onefile = TRUE,
+    family = "Helvetica", paper = "special"
+  )
+  for (plot in strict_plots) {
+    print(plot)
+  }
+  grDevices::dev.off()
+  plots <- c(plots, strict_plots)
 }
 
 # Optional NGS_LibraryQC mapping summary used for tabular audit.
