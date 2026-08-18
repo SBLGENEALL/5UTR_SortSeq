@@ -66,6 +66,19 @@ bash run_pipeline.sh reanalyze
 
 `gate_entry_probability_raw > 1`은 실제 확률이 100%를 넘었다는 뜻이 아니라 composition/PCR/sampling 차이를 확인하라는 QC 신호입니다.
 
+## `bin_probability`의 정확한 의미
+
+`bin1_probability`–`bin6_probability`는 raw-read 비율이 아닙니다. 다음 두 보정을 한 뒤
+해당 UTR 내부에서 합이 1이 되도록 정규화한 값입니다.
+
+1. sequencing depth: `count_ib / total_assigned_UTR_reads_b`
+2. sorter bin size: 위 값에 `population_fraction_b`를 곱함
+
+따라서 `bin1_probability=0.20`은 해당 UTR를 가진 target-gate 세포 중 약 20%가
+bin1에 존재한다고 추정한다는 뜻입니다. 직접 관찰한 단일세포 확률이나 transfection
+확률은 아닙니다. 계산 중간값은 `bash run_pipeline.sh scoring-steps`로 생성되는
+`results/sortseq/scoring_steps/` CSV에서 확인합니다.
+
 ## Strict coverage와 low-count 과대평가 방지
 
 `pass_coverage`의 기본값(`unsorted >= 50`, `total six bins >= 100`)은 탐색 결과를

@@ -359,6 +359,35 @@ single-bin jackpot suspect 제외
 Whole unsorted는 별도 기준 sample이므로 `population_fraction`을 비워 둡니다.
 주 fluorescence score는 6개 bin 내부 분포에서 계산합니다.
 
+### 계산을 한 단계씩 직접 감사하기
+
+LibraryQC의 `variant_count_matrix.csv`를 사용해 전체 UTR의 중간 계산값을 CSV로
+내보낼 수 있습니다.
+
+```bash
+bash run_pipeline.sh scoring-steps
+```
+
+| 파일 | 계산 단계 | 의미 |
+|---|---|---|
+| `01_raw_counts.csv` | Raw count | variant count matrix의 원래 count |
+| `02_depth_normalized_frequency.csv` | Depth normalization | `c_ib / N_b`; 각 bin 내 UTR 비율 |
+| `03_bin_size_corrected_mass.csv` | Bin-size correction | `w_b × c_ib/N_b` |
+| `04_within_utr_bin_probability.csv` | Within-UTR normalization | UTR별 bin1–6 합을 1로 정규화 |
+| `05_score_contributions_and_final_score.csv` | Weighted score | probability에 6–1점을 곱해 합산 |
+| `06_all_steps_combined_audit.csv` | 전체 결합 | 한 UTR의 모든 중간값을 한 행에서 추적 |
+
+`probability`는 NGS read 확률이 아니라 다음 조건부 세포분율 추정치입니다.
+
+```text
+P(bin b | UTR i, target gate)
+= w_b × (count_ib / total_reads_b)
+  / sum_k[w_k × (count_ik / total_reads_k)]
+```
+
+Unsorted는 raw/depth-normalized QC에는 포함되지만 6-bin fluorescence score에는
+포함되지 않습니다.
+
 ---
 
 ## 5/5. Plot: R QC figure와 PDF

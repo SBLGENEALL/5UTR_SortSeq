@@ -96,6 +96,7 @@ bash run_pipeline.sh preflight
 bash run_pipeline.sh rescue
 bash run_pipeline.sh libraryqc
 bash run_pipeline.sh analyze
+bash run_pipeline.sh scoring-steps
 bash run_pipeline.sh plot
 ```
 
@@ -132,6 +133,33 @@ bash run_pipeline.sh reanalyze
 
 기존 `results/sortseq`은 `archive/`로 이동되며 raw FASTQ, rescue, LibraryQC 결과는
 수정되지 않습니다.
+
+## Scoring 계산을 5단계 CSV로 확인
+
+`variant_count_matrix.csv`에서 바로 시작해 각 중간 계산을 확인하려면 Python 환경에서
+다음을 실행합니다.
+
+```bash
+bash run_pipeline.sh scoring-steps
+```
+
+이 명령은 기존 분석 결과를 삭제하거나 재계산하지 않고 다음 CSV를 추가합니다.
+
+```text
+results/sortseq/scoring_steps/00_sample_parameters.csv
+results/sortseq/scoring_steps/01_raw_counts.csv
+results/sortseq/scoring_steps/02_depth_normalized_frequency.csv
+results/sortseq/scoring_steps/03_bin_size_corrected_mass.csv
+results/sortseq/scoring_steps/04_within_utr_bin_probability.csv
+results/sortseq/scoring_steps/05_score_contributions_and_final_score.csv
+results/sortseq/scoring_steps/06_all_steps_combined_audit.csv
+results/sortseq/scoring_steps/07_calculation_checks.csv
+```
+
+여기서 `binN_probability`는 sequencing read가 그 bin에 들어갈 확률이 아니라,
+depth와 bin size를 보정한 뒤 추정한
+`P(bin N | 해당 UTR, mCherry+/GFP- gate)`입니다. 한 UTR의 bin1–6 probability 합은
+1이며, 이 probability에 `6,5,4,3,2,1`을 곱한 합이 expected bin score입니다.
 
 ## Strict coverage와 최종 후보 그림
 

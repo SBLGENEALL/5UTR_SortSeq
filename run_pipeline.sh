@@ -13,6 +13,7 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh rescue
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh libraryqc
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh analyze
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh scoring-steps
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh status
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh resources
@@ -21,7 +22,7 @@ Usage:
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|plot|status|resources|reanalyze|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|plot|status|resources|reanalyze|full)$ ]]; then
   usage
   exit 2
 fi
@@ -489,6 +490,19 @@ run_plot() {
   stage_complete
 }
 
+run_scoring_steps() {
+  : "${SAMPLE_MAP:?SAMPLE_MAP is required}"
+  require_path "${SAMPLE_MAP}" "sample map"
+  local matrix="${RESULTS_DIR}/library_qc/combined/variant_count_matrix.csv"
+  require_path "${matrix}" "NGS_LibraryQC variant count matrix"
+  echo "Exporting five scoring steps from: ${matrix}"
+  "${PYTHON_BIN}" "${REPO_DIR}/scripts/export_scoring_steps.py" \
+    --matrix "${matrix}" \
+    --sample-map "${SAMPLE_MAP}" \
+    --outdir "${RESULTS_DIR}/sortseq/scoring_steps" \
+    --reference-variant-id "${REFERENCE_VARIANT_ID}"
+}
+
 if [[ "${MODE}" == "full" && "${OPTION}" == "--replace" ]]; then
   archive_existing_outputs
 fi
@@ -498,6 +512,7 @@ case "${MODE}" in
   rescue) run_rescue ;;
   libraryqc) run_libraryqc ;;
   analyze) run_analyze ;;
+  scoring-steps) run_scoring_steps ;;
   plot) run_plot ;;
   status) show_status ;;
   resources) show_resources ;;
