@@ -132,6 +132,15 @@ bash run_pipeline.sh bimodality-qc
 후보가 급감하는지 확인합니다. 자세한 설명은
 [BIMODALITY_QC_KO.md](BIMODALITY_QC_KO.md)를 보세요.
 
+## 두 scoring endpoint 비교
+
+`expected_bin_score`와 `top15_vs_unsorted_log2_enrichment` 중 하나를 고르기 전에
+`bash run_pipeline.sh compare-metrics`로 total six-bin count가 200보다 큰 동일 UTR
+집합에서 Spearman rho와 Top50 overlap을 확인합니다. 두 지표 모두 높은 consensus를
+우선 후보로 사용하고, score-only는 intermediate/broad shift인지, top15-only는
+high-tail과 동시에 low-tail도 큰지 24번 heatmap에서 확인합니다. 자세한 실행과 판단은
+[METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 보세요.
+
 ## 결론 문구
 
 biological replicate가 하나라면 다음 수준이 타당합니다.

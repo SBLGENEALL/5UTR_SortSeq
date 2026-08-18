@@ -397,6 +397,17 @@ bash run_pipeline.sh bimodality-qc
 검사하고 read-count 구간별 양극화 후보 비율을 계산합니다. 기준과 해석은
 [BIMODALITY_QC_KO.md](BIMODALITY_QC_KO.md)를 참조하세요.
 
+Expected score와 bin1+bin2 enrichment 중 어느 endpoint가 적합한지 비교하려면 Python
+환경에서 다음을 실행합니다.
+
+```bash
+bash run_pipeline.sh compare-metrics
+```
+
+이 명령은 total six-bin raw count가 200 이하인 UTR를 제외하고 두 지표의 Spearman
+상관성, rank 관계, Top 20/50/100 중복과 discordant 후보를 계산합니다. 자세한 기준은
+[METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 참조하세요.
+
 | 파일 | 계산 단계 | 의미 |
 |---|---|---|
 | `01_raw_counts.csv` | Raw count | variant count matrix의 원래 count |
@@ -454,6 +465,11 @@ results/sortseq/figures/bimodality/18_bimodal_fraction_by_read_count.png
 results/sortseq/figures/bimodality/19_high_vs_low_tail_probability.png
 results/sortseq/figures/bimodality/20_clear_bimodal_bin_probability_heatmap.png
 results/sortseq/figures/bimodality/bimodality_qc_figures.pdf
+results/sortseq/figures/metric_comparison/21_expected_score_vs_top15_enrichment.png
+results/sortseq/figures/metric_comparison/22_score_rank_vs_top15_rank.png
+results/sortseq/figures/metric_comparison/23_top_candidate_overlap.png
+results/sortseq/figures/metric_comparison/24_discordant_candidate_bin_heatmap.png
+results/sortseq/figures/metric_comparison/metric_comparison_figures.pdf
 ```
 
 09번은 절대 cell fraction이고, 10번은 `log2(probability / bin fraction)`입니다.

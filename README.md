@@ -98,6 +98,7 @@ bash run_pipeline.sh libraryqc
 bash run_pipeline.sh analyze
 bash run_pipeline.sh scoring-steps
 bash run_pipeline.sh bimodality-qc
+bash run_pipeline.sh compare-metrics
 bash run_pipeline.sh plot
 ```
 
@@ -125,6 +126,8 @@ results/sortseq/top15_priority_candidates.csv
 results/sortseq/bimodality_qc/bimodality_summary.csv
 results/sortseq/bimodality_qc/clear_bimodal_candidates.csv
 results/sortseq/bimodality_qc/utra_like_strong_polarization.csv
+results/sortseq/metric_comparison/metric_comparison_summary.csv
+results/sortseq/metric_comparison/top_candidates_consensus.csv
 results/sortseq/figures/sortseq_qc_figures.pdf
 results/sortseq/figures/strict/strict_candidate_figures.pdf
 results/sortseq/figures/top15/top15_candidate_figures.pdf
@@ -169,6 +172,15 @@ read count–polarization 상관을 계산합니다. 이 결과는 “bimodality
 Python 환경에서 QC를 실행한 뒤 R 환경에서 기존 `plot` 명령을 실행하면
 `results/sortseq/figures/bimodality/`에 17–20번 그림과 PDF가 생성됩니다. 자세한 기준과
 해석은 [UTR A형 양극화 분포 QC](docs/BIMODALITY_QC_KO.md)를 보세요.
+
+## Expected score와 top15 enrichment 직접 비교
+
+`bash run_pipeline.sh compare-metrics`는 6개 bin total raw count가 200 이하인 UTR를
+제외하고, 동일한 read-supported UTR 집합에서 expected score와 bin1+bin2 unsorted
+enrichment의 Spearman 상관성, Top 20/50/100 overlap, original 대비 일치/불일치 후보를
+계산합니다. R `plot`을 다시 실행하면 `figures/metric_comparison/`에 21–24번 그림이
+생성됩니다. 자세한 해석은
+[두 scoring 방식 직접 비교](docs/METRIC_COMPARISON_KO.md)를 보세요.
 
 ## Scoring 계산을 5단계 CSV로 확인
 
@@ -234,7 +246,8 @@ v0.1.7의 R 그림은 `unsorted >= 100`, `total six bins >= 500`, `bin1+2 >= 50`
 서버 설정은 [docs/SERVER_GUIDE_KO.md](docs/SERVER_GUIDE_KO.md), 결과 해석은
 [docs/RESULTS_GUIDE_KO.md](docs/RESULTS_GUIDE_KO.md), Undetermined 처리 원칙은
 [docs/UNDETERMINED_RESCUE_KO.md](docs/UNDETERMINED_RESCUE_KO.md), 양극화 분포는
-[docs/BIMODALITY_QC_KO.md](docs/BIMODALITY_QC_KO.md)를 보세요.
+[docs/BIMODALITY_QC_KO.md](docs/BIMODALITY_QC_KO.md), scoring 선택은
+[docs/METRIC_COMPARISON_KO.md](docs/METRIC_COMPARISON_KO.md)를 보세요.
 
 ## 자체 테스트
 

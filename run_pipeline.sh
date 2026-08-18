@@ -15,6 +15,7 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh analyze
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh scoring-steps
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh bimodality-qc
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh compare-metrics
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh status
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh resources
@@ -24,7 +25,7 @@ Usage:
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|bimodality-qc|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|bimodality-qc|compare-metrics|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
   usage
   exit 2
 fi
@@ -80,6 +81,10 @@ BIMODALITY_MIN_HIGH_TAIL_PROBABILITY="${BIMODALITY_MIN_HIGH_TAIL_PROBABILITY:-0.
 BIMODALITY_MIN_LOW_TAIL_PROBABILITY="${BIMODALITY_MIN_LOW_TAIL_PROBABILITY:-0.20}"
 BIMODALITY_MAX_MIDDLE_PROBABILITY="${BIMODALITY_MAX_MIDDLE_PROBABILITY:-0.30}"
 BIMODALITY_MAX_VALLEY_RATIO="${BIMODALITY_MAX_VALLEY_RATIO:-0.75}"
+METRIC_COMPARE_MIN_TOTAL_COUNT="${METRIC_COMPARE_MIN_TOTAL_COUNT:-201}"
+METRIC_COMPARE_MIN_UNSORTED_COUNT="${METRIC_COMPARE_MIN_UNSORTED_COUNT:-50}"
+METRIC_COMPARE_MIN_HIGH_BIN_COUNT="${METRIC_COMPARE_MIN_HIGH_BIN_COUNT:-20}"
+METRIC_COMPARE_TOP_N="${METRIC_COMPARE_TOP_N:-50}"
 
 # Multiprocessing stages own the parallelism. Prevent BLAS/OpenMP libraries
 # loaded by individual workers from multiplying 128 workers by extra threads.
@@ -503,6 +508,13 @@ run_plot() {
   stage_begin "5/5" "Plot: R QC figures and PDF"
   Rscript "${REPO_DIR}/scripts/plot_sortseq.R" \
     "${RESULTS_DIR}" "${RESULTS_DIR}/sortseq/figures"
+  if [[ -e "${RESULTS_DIR}/sortseq/metric_comparison/metric_comparison_supported.csv" ]]; then
+    Rscript "${REPO_DIR}/scripts/plot_metric_comparison.R" \
+      "${RESULTS_DIR}/sortseq/metric_comparison" \
+      "${RESULTS_DIR}/sortseq/figures/metric_comparison"
+  else
+    echo "Metric-comparison CSVs not found; run 'bash run_pipeline.sh compare-metrics' to add figures 21-24."
+  fi
   stage_complete
 }
 
@@ -534,6 +546,19 @@ run_bimodality_qc() {
     --max-valley-ratio "${BIMODALITY_MAX_VALLEY_RATIO}"
 }
 
+run_compare_metrics() {
+  local result_table="${RESULTS_DIR}/sortseq/utr_results_full.tsv"
+  require_path "${result_table}" "Sort-seq result table"
+  echo "Comparing expected score and top-15% enrichment on a shared read-supported universe"
+  "${PYTHON_BIN}" "${REPO_DIR}/scripts/compare_metrics.py" \
+    --input "${result_table}" \
+    --outdir "${RESULTS_DIR}/sortseq/metric_comparison" \
+    --min-total-count "${METRIC_COMPARE_MIN_TOTAL_COUNT}" \
+    --min-unsorted-count "${METRIC_COMPARE_MIN_UNSORTED_COUNT}" \
+    --min-high-bin-count "${METRIC_COMPARE_MIN_HIGH_BIN_COUNT}" \
+    --top-n "${METRIC_COMPARE_TOP_N}"
+}
+
 if [[ "${MODE}" == "full" && "${OPTION}" == "--replace" ]]; then
   archive_existing_outputs
 fi
@@ -545,6 +570,7 @@ case "${MODE}" in
   analyze) run_analyze ;;
   scoring-steps) run_scoring_steps ;;
   bimodality-qc) run_bimodality_qc ;;
+  compare-metrics) run_compare_metrics ;;
   plot) run_plot ;;
   status) show_status ;;
   resources) show_resources ;;
