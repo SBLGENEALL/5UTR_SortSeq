@@ -61,7 +61,9 @@ for (column in c(
   paste0("bin", 1:6, "_count"),
   paste0("bin", 1:6, "_probability")
 )) {
-  results[[column]] <- suppressWarnings(as.numeric(results[[column]]))
+  if (column %in% colnames(results)) {
+    results[[column]] <- suppressWarnings(as.numeric(results[[column]]))
+  }
 }
 as_bool <- function(values) {
   tolower(as.character(values)) %in% c("true", "t", "1")

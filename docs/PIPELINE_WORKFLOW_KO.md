@@ -343,9 +343,9 @@ results/sortseq/easy_report.html
 4. `high15_enrichment`: 1이면 pool 평균, 1보다 크면 high 쪽 농축
 5. `top15_vs_unsorted_log2_enrichment`: bin1+2의 whole-unsorted 대비 농축도;
    고발현 hit-selection의 주 랭킹
-5. `most_enriched_bin`과 bin1–6 probability 분포
-6. `expression_tier`: 정확한 개별 등수보다 top 1/5/10% tier 중심
-7. whole unsorted 대비 target-gate representation은 보조 QC로 사용
+6. `most_enriched_bin`과 bin1–6 probability 분포
+7. `expression_tier`: 정확한 개별 등수보다 top 1/5/10% tier 중심
+8. whole unsorted 대비 target-gate representation은 보조 QC로 사용
 
 최종 hit 목록은 permissive `pass_coverage`가 아니라 다음 strict filter를 추가로
 통과한 UTR를 사용합니다.
