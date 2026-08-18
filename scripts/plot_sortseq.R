@@ -398,6 +398,44 @@ if (file.exists(strict_candidate_path)) {
   )
 }
 
+# Backward-compatible fallback for v0.1.4 result tables and for an absent or
+# empty manually generated candidate file. Recompute the documented strict
+# filter directly from utr_results_full.tsv so the R-only plot step is enough.
+if (length(strict_candidate_ids) == 0) {
+  fallback_unsorted_cutoff <- max(
+    1000, round(0.10 * median(results$unsorted_count, na.rm = TRUE))
+  )
+  fallback_total_cutoff <- max(
+    5000, round(0.10 * median(results$total_6bin_count, na.rm = TRUE))
+  )
+  fallback_high_bin_count <- results$bin1_count + results$bin2_count
+  fallback_max_probability <- apply(
+    results[, paste0("bin", 1:6, "_probability"), drop = FALSE],
+    1, max, na.rm = TRUE
+  )
+  fallback_strict_pass <-
+    results$unsorted_count >= fallback_unsorted_cutoff &
+    results$total_6bin_count >= fallback_total_cutoff &
+    fallback_high_bin_count >= 200 &
+    results$detected_in_n_bins >= 3
+  fallback_jackpot <-
+    fallback_max_probability >= 0.85 & results$detected_in_n_bins <= 2
+  fallback_high_candidate <- if ("high_candidate_flag" %in% colnames(results)) {
+    as_bool(results$high_candidate_flag)
+  } else {
+    rep(FALSE, nrow(results))
+  }
+  strict_candidate_ids <- as.character(
+    results$variant_id[
+      fallback_strict_pass & fallback_high_candidate & !fallback_jackpot
+    ]
+  )
+  message(
+    "Strict candidates recomputed from utr_results_full.tsv: ",
+    length(strict_candidate_ids)
+  )
+}
+
 if (length(strict_candidate_ids) > 0) {
   strict_output_dir <- file.path(output_dir, "strict")
   dir.create(strict_output_dir, recursive = TRUE, showWarnings = FALSE)

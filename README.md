@@ -150,7 +150,8 @@ bin1 + bin2 raw count >= 200
 `high_confidence_candidates.tsv`를 만듭니다. R 환경에서 `bash run_pipeline.sh plot`을
 실행하면 기존 그림을 유지하면서 `figures/strict/` 아래에 strict 후보용 그림과 PDF를
 추가합니다. 사용자가 서버에서 이미 `high_confidence_candidates.tsv`를 만든 경우에는
-analyze를 다시 실행하지 않고 plot만 실행해도 됩니다.
+analyze를 다시 실행하지 않고 plot만 실행해도 됩니다. 파일이 없거나 비어 있어도
+v0.1.6부터는 `utr_results_full.tsv`에서 같은 strict 기준을 R이 자동 재계산합니다.
 
 특히 두 heatmap을 구분해서 봅니다.
 
