@@ -1010,6 +1010,405 @@ if (all(top15_required %in% colnames(results))) {
   }
 }
 
+# Whole-library six-bin profile overview. The Python profile-qc command first
+# clusters read-supported UTRs by Hellinger distance on their normalized
+# probability vectors. These plots retain every included UTR rather than only
+# displaying the top-ranked candidates.
+all_profile_dir <- file.path(sortseq_dir, "all_utr_profiles")
+all_profile_assignments_path <- file.path(
+  all_profile_dir, "all_utr_profile_assignments.csv"
+)
+all_profile_summary_path <- file.path(
+  all_profile_dir, "all_utr_profile_cluster_summary.csv"
+)
+if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary_path)) {
+  all_profile_output_dir <- file.path(output_dir, "all_utr_profiles")
+  dir.create(all_profile_output_dir, recursive = TRUE, showWarnings = FALSE)
+  save_all_profile_png <- function(filename, plot, width = 11.8, height = 6.6) {
+    ragg::agg_png(
+      filename = file.path(all_profile_output_dir, filename),
+      width = width, height = height, units = "in", res = 320,
+      background = "white"
+    )
+    print(plot)
+    grDevices::dev.off()
+  }
+
+  all_profile <- read.csv(
+    all_profile_assignments_path, stringsAsFactors = FALSE, check.names = FALSE
+  )
+  all_profile_summary <- read.csv(
+    all_profile_summary_path, stringsAsFactors = FALSE, check.names = FALSE
+  )
+  all_profile$variant_id <- as.character(all_profile$variant_id)
+  for (column in c(
+    "profile_cluster", "heatmap_order", "high15_probability",
+    "expected_bin_score", "total_6bin_count", "unsorted_count",
+    probability_columns
+  )) {
+    if (column %in% colnames(all_profile)) {
+      all_profile[[column]] <- suppressWarnings(as.numeric(all_profile[[column]]))
+    }
+  }
+  for (column in c("is_reference_variant", "recommended_for_cloning")) {
+    if (column %in% colnames(all_profile)) {
+      all_profile[[column]] <- as_bool(all_profile[[column]])
+    }
+  }
+  if (!("is_reference_variant" %in% colnames(all_profile))) {
+    all_profile$is_reference_variant <-
+      tolower(trimws(all_profile$variant_id)) %in% c("original", "orginal")
+  }
+
+  all_profile_required <- c(
+    "variant_id", "profile_cluster", "profile_label", "heatmap_order",
+    "is_reference_variant", probability_columns
+  )
+  missing_all_profile <- setdiff(all_profile_required, colnames(all_profile))
+  summary_probability_columns <- paste0("bin", 1:6, "_mean_probability")
+  missing_all_profile_summary <- setdiff(
+    c("profile_cluster", "profile_label", "utr_count", summary_probability_columns),
+    colnames(all_profile_summary)
+  )
+  if (length(missing_all_profile) > 0 || length(missing_all_profile_summary) > 0) {
+    stop(
+      "All-UTR profile files are missing required columns: ",
+      paste(c(missing_all_profile, missing_all_profile_summary), collapse = ", ")
+    )
+  }
+
+  all_profile <- all_profile[
+    order(all_profile$heatmap_order, all_profile$variant_id), , drop = FALSE
+  ]
+  all_profile_summary$profile_cluster <- suppressWarnings(
+    as.numeric(all_profile_summary$profile_cluster)
+  )
+  all_profile_summary$utr_count <- suppressWarnings(
+    as.numeric(all_profile_summary$utr_count)
+  )
+  for (column in summary_probability_columns) {
+    all_profile_summary[[column]] <- suppressWarnings(
+      as.numeric(all_profile_summary[[column]])
+    )
+  }
+  all_profile_summary <- all_profile_summary[
+    order(all_profile_summary$profile_cluster), , drop = FALSE
+  ]
+  profile_label_levels <- as.character(all_profile_summary$profile_label)
+  all_profile$profile_label <- factor(
+    all_profile$profile_label, levels = profile_label_levels
+  )
+
+  profile_long <- do.call(
+    rbind,
+    lapply(seq_len(nrow(all_profile)), function(row_number) {
+      data.frame(
+        variant_id = all_profile$variant_id[[row_number]],
+        profile_cluster = all_profile$profile_cluster[[row_number]],
+        profile_label = all_profile$profile_label[[row_number]],
+        heatmap_order = all_profile$heatmap_order[[row_number]],
+        is_reference = all_profile$is_reference_variant[[row_number]],
+        bin_number = seq_len(6),
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+        probability = as.numeric(unlist(
+          all_profile[row_number, probability_columns], use.names = FALSE
+        )),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  profile_long$profile_label <- factor(
+    profile_long$profile_label, levels = profile_label_levels
+  )
+  profile_long$variant_id <- factor(
+    profile_long$variant_id, levels = rev(all_profile$variant_id)
+  )
+
+  # Prefer actual analysis metadata, retain the nominal design as a backward-
+  # compatible fallback for existing v0.2.0 result folders.
+  all_profile_bin_fraction <- c(0.05, 0.10, 0.15, 0.20, 0.30, 0.20)
+  if (all(c(
+    "sample_type", "bin_number", "population_fraction_used"
+  ) %in% colnames(sample_qc))) {
+    sample_qc_bins <- sample_qc[
+      tolower(as.character(sample_qc$sample_type)) == "bin", , drop = FALSE
+    ]
+    sample_qc_bins$bin_number <- suppressWarnings(
+      as.numeric(sample_qc_bins$bin_number)
+    )
+    sample_qc_bins$population_fraction_used <- suppressWarnings(
+      as.numeric(sample_qc_bins$population_fraction_used)
+    )
+    sample_qc_bins <- sample_qc_bins[
+      order(sample_qc_bins$bin_number), , drop = FALSE
+    ]
+    loaded_fraction <- sample_qc_bins$population_fraction_used
+    if (length(loaded_fraction) == 6 && all(is.finite(loaded_fraction)) &&
+        all(loaded_fraction > 0)) {
+      all_profile_bin_fraction <- loaded_fraction / sum(loaded_fraction)
+    }
+  } else {
+    sample_input_path <- file.path(sortseq_dir, "input", "samples.tsv")
+    if (file.exists(sample_input_path)) {
+      sample_input <- read_tsv(sample_input_path)
+      if (all(c(
+        "sample_type", "bin_number", "population_fraction"
+      ) %in% colnames(sample_input))) {
+        sample_input_bins <- sample_input[
+          tolower(as.character(sample_input$sample_type)) == "bin", , drop = FALSE
+        ]
+        sample_input_bins <- sample_input_bins[
+          order(suppressWarnings(as.numeric(sample_input_bins$bin_number))),
+          , drop = FALSE
+        ]
+        loaded_fraction <- suppressWarnings(
+          as.numeric(sample_input_bins$population_fraction)
+        )
+        if (length(loaded_fraction) == 6 && all(is.finite(loaded_fraction)) &&
+            all(loaded_fraction > 0)) {
+          all_profile_bin_fraction <- loaded_fraction / sum(loaded_fraction)
+        }
+      }
+    }
+  }
+  profile_long$bin_fraction <- all_profile_bin_fraction[profile_long$bin_number]
+  profile_long$relative_log2_enrichment <- log2(
+    pmax(profile_long$probability, 1e-9) / profile_long$bin_fraction
+  )
+
+  all_profile_plots <- list()
+  p_all_profile_probability <- ggplot2::ggplot(
+    profile_long,
+    ggplot2::aes(x = bin, y = variant_id, fill = probability)
+  ) +
+    ggplot2::geom_tile(linewidth = 0) +
+    ggplot2::facet_grid(
+      profile_label ~ ., scales = "free_y", space = "free_y", switch = "y"
+    ) +
+    ggplot2::scale_fill_gradientn(
+      colors = viridisLite::viridis(256, option = "B"),
+      labels = scales::percent
+    ) +
+    ggplot2::scale_y_discrete(expand = c(0, 0)) +
+    ggplot2::labs(
+      title = "Whole-library six-bin probability profiles",
+      subtitle = sprintf(
+        "%s read-supported UTRs; one horizontal line per UTR, grouped by profile shape",
+        scales::comma(nrow(all_profile))
+      ),
+      caption = "Rows are ordered by Hellinger/Ward clustering. Red outline marks original/orginal.",
+      x = "FACS bin (bin1 = highest mCherry)", y = NULL,
+      fill = "Estimated\ncell fraction"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      panel.spacing.y = grid::unit(0.08, "lines"),
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank(),
+      strip.placement = "outside",
+      strip.text.y.left = ggplot2::element_text(
+        angle = 0, color = colors[["ink"]], face = "bold", size = 9
+      ),
+      strip.background = ggplot2::element_rect(fill = "#F2F5F7", color = NA)
+    )
+  if (any(profile_long$is_reference)) {
+    p_all_profile_probability <- p_all_profile_probability +
+      ggplot2::geom_tile(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        fill = NA, color = "#B2182B", linewidth = 0.65
+      )
+  }
+  save_all_profile_png(
+    "25_all_utr_bin_probability_heatmap.png",
+    p_all_profile_probability, 10.5, 13.5
+  )
+  all_profile_plots[["25"]] <- p_all_profile_probability
+
+  p_all_profile_enrichment <- ggplot2::ggplot(
+    profile_long,
+    ggplot2::aes(x = bin, y = variant_id, fill = relative_log2_enrichment)
+  ) +
+    ggplot2::geom_tile(linewidth = 0) +
+    ggplot2::facet_grid(
+      profile_label ~ ., scales = "free_y", space = "free_y", switch = "y"
+    ) +
+    ggplot2::scale_fill_gradient2(
+      low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0,
+      limits = c(-3, 3), oob = scales::squish
+    ) +
+    ggplot2::scale_y_discrete(expand = c(0, 0)) +
+    ggplot2::labs(
+      title = "Whole-library enrichment relative to sorter-bin size",
+      subtitle = "log2[P(bin | UTR, target gate) / bin population fraction]",
+      caption = "Red = more frequent than the bin baseline; blue = less frequent; white = baseline-like.",
+      x = "FACS bin (bin1 = highest mCherry)", y = NULL,
+      fill = "log2 relative\nenrichment"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      panel.spacing.y = grid::unit(0.08, "lines"),
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank(),
+      strip.placement = "outside",
+      strip.text.y.left = ggplot2::element_text(
+        angle = 0, color = colors[["ink"]], face = "bold", size = 9
+      ),
+      strip.background = ggplot2::element_rect(fill = "#F2F5F7", color = NA)
+    )
+  if (any(profile_long$is_reference)) {
+    p_all_profile_enrichment <- p_all_profile_enrichment +
+      ggplot2::geom_tile(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        fill = NA, color = "#111111", linewidth = 0.65
+      )
+  }
+  save_all_profile_png(
+    "26_all_utr_relative_enrichment_heatmap.png",
+    p_all_profile_enrichment, 10.5, 13.5
+  )
+  all_profile_plots[["26"]] <- p_all_profile_enrichment
+
+  profile_summary_long <- do.call(
+    rbind,
+    lapply(seq_len(nrow(all_profile_summary)), function(row_number) {
+      data.frame(
+        profile_cluster = all_profile_summary$profile_cluster[[row_number]],
+        profile_label = all_profile_summary$profile_label[[row_number]],
+        utr_count = all_profile_summary$utr_count[[row_number]],
+        bin_number = seq_len(6),
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+        mean_probability = as.numeric(unlist(
+          all_profile_summary[row_number, summary_probability_columns],
+          use.names = FALSE
+        )),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  profile_summary_long$profile_label <- factor(
+    profile_summary_long$profile_label, levels = profile_label_levels
+  )
+  profile_bin_colors <- c(
+    bin1 = "#B2182B", bin2 = "#EF8A62", bin3 = "#FDDBC7",
+    bin4 = "#D1E5F0", bin5 = "#67A9CF", bin6 = "#2166AC"
+  )
+  p_profile_composition <- ggplot2::ggplot(
+    profile_summary_long,
+    ggplot2::aes(x = profile_label, y = mean_probability, fill = bin)
+  ) +
+    ggplot2::geom_col(width = 0.72, color = "white", linewidth = 0.2) +
+    ggplot2::scale_fill_manual(values = profile_bin_colors) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent, expand = ggplot2::expansion(mult = c(0, 0.02))
+    ) +
+    ggplot2::labs(
+      title = "Mean bin composition of each UTR profile cluster",
+      subtitle = "Profile 1 has the highest cluster-median six-bin score; cluster numbers are not candidate ranks",
+      x = NULL, y = "Mean probability across UTRs", fill = "FACS bin"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 30, hjust = 1),
+      panel.grid.major.x = ggplot2::element_blank()
+    )
+  save_all_profile_png(
+    "27_profile_cluster_composition.png", p_profile_composition, 12.5, 7.2
+  )
+  all_profile_plots[["27"]] <- p_profile_composition
+
+  p_profile_variability <- ggplot2::ggplot() +
+    ggplot2::geom_line(
+      data = profile_long,
+      ggplot2::aes(
+        x = bin_number, y = probability, group = variant_id
+      ),
+      color = "#70808A", alpha = 0.055, linewidth = 0.35
+    ) +
+    ggplot2::geom_line(
+      data = profile_summary_long,
+      ggplot2::aes(
+        x = bin_number, y = mean_probability, group = profile_label
+      ),
+      color = colors[["orange"]], linewidth = 1.25
+    ) +
+    ggplot2::geom_point(
+      data = profile_summary_long,
+      ggplot2::aes(x = bin_number, y = mean_probability),
+      color = colors[["orange"]], size = 2.0
+    ) +
+    ggplot2::facet_wrap(~profile_label, ncol = 4) +
+    ggplot2::scale_x_continuous(
+      breaks = seq_len(6), labels = paste0("bin", 1:6)
+    ) +
+    ggplot2::scale_y_continuous(labels = scales::percent) +
+    ggplot2::labs(
+      title = "Individual UTR profiles and cluster means",
+      subtitle = "Thin gray = each UTR; orange = cluster mean; red = original/orginal when present",
+      x = "FACS bin (bin1 = highest mCherry)", y = "Estimated cell fraction"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+      panel.grid.minor = ggplot2::element_blank()
+    )
+  if (any(profile_long$is_reference)) {
+    p_profile_variability <- p_profile_variability +
+      ggplot2::geom_line(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        ggplot2::aes(x = bin_number, y = probability, group = variant_id),
+        color = "#B2182B", linewidth = 1.1
+      ) +
+      ggplot2::geom_point(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        ggplot2::aes(x = bin_number, y = probability),
+        color = "#B2182B", size = 1.8
+      )
+  }
+  save_all_profile_png(
+    "28_profile_cluster_variability.png", p_profile_variability, 13.5, 9.5
+  )
+  all_profile_plots[["28"]] <- p_profile_variability
+
+  reference_profile_cluster <- NA
+  if (any(all_profile$is_reference_variant)) {
+    reference_profile_cluster <- all_profile$profile_cluster[
+      which(all_profile$is_reference_variant)[[1]]
+    ]
+  }
+  all_profile_plot_statistics <- data.frame(
+    metric = c(
+      "profile_included_utr", "profile_cluster_count",
+      "reference_profile_cluster", paste0("bin", 1:6, "_fraction_used")
+    ),
+    value = c(
+      nrow(all_profile), nrow(all_profile_summary), reference_profile_cluster,
+      all_profile_bin_fraction
+    ),
+    stringsAsFactors = FALSE
+  )
+  write.csv(
+    all_profile_plot_statistics,
+    file.path(all_profile_output_dir, "all_utr_profile_plot_statistics.csv"),
+    quote = FALSE, row.names = FALSE
+  )
+  grDevices::pdf(
+    file.path(all_profile_output_dir, "all_utr_profile_figures.pdf"),
+    width = 13.333, height = 9.5, onefile = TRUE,
+    family = "Helvetica", paper = "special"
+  )
+  for (plot in all_profile_plots[order(names(all_profile_plots))]) {
+    print(plot)
+  }
+  grDevices::dev.off()
+  plots <- c(plots, all_profile_plots[order(names(all_profile_plots))])
+} else {
+  message(
+    "All-UTR profile plots skipped: run `bash run_pipeline.sh profile-qc` first."
+  )
+}
+
 # High+low-tail distribution QC. The Python bimodality-qc command must be run
 # first; these plots test whether polarization is concentrated among low-count
 # variants and therefore likely to be a sampling artifact.

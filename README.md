@@ -97,6 +97,7 @@ bash run_pipeline.sh rescue
 bash run_pipeline.sh libraryqc
 bash run_pipeline.sh analyze
 bash run_pipeline.sh scoring-steps
+bash run_pipeline.sh profile-qc
 bash run_pipeline.sh bimodality-qc
 bash run_pipeline.sh compare-metrics
 bash run_pipeline.sh plot
@@ -127,6 +128,8 @@ results/sortseq/top50_candidates_for_cloning.csv
 results/sortseq/top15_enrichment_ranking.csv
 results/sortseq/top15_candidates.csv
 results/sortseq/top15_priority_candidates.csv
+results/sortseq/all_utr_profiles/all_utr_profile_assignments.csv
+results/sortseq/all_utr_profiles/all_utr_profile_cluster_summary.csv
 results/sortseq/bimodality_qc/bimodality_summary.csv
 results/sortseq/bimodality_qc/clear_bimodal_candidates.csv
 results/sortseq/bimodality_qc/utra_like_strong_polarization.csv
@@ -135,6 +138,7 @@ results/sortseq/metric_comparison/top_candidates_consensus.csv
 results/sortseq/figures/sortseq_qc_figures.pdf
 results/sortseq/figures/strict/strict_candidate_figures.pdf
 results/sortseq/figures/top15/top15_candidate_figures.pdf
+results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 ```
 
 `original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 High15와
@@ -189,6 +193,26 @@ High15 probability의 Spearman 상관성, Top 20/50/100 overlap, original 대비
 계산합니다. R `plot`을 다시 실행하면 `figures/metric_comparison/`에 21–24번 그림이
 생성됩니다. 자세한 해석은
 [두 scoring 방식 직접 비교](docs/METRIC_COMPARISON_KO.md)를 보세요.
+
+## 전체 UTR의 6-bin 분포 보기
+
+Top 후보뿐 아니라 read-support 기준을 통과한 모든 UTR의 분포를 함께 보려면 Python
+환경과 R 환경에서 차례로 실행합니다.
+
+```bash
+# Python 환경
+bash run_pipeline.sh profile-qc
+
+# R 환경
+bash run_pipeline.sh plot
+```
+
+`profile-qc`는 기본적으로 `unsorted >= 50`, `6-bin 합 >= 200`, `bin1+2 >= 20`인
+UTR를 여섯-bin probability 모양에 따라 묶습니다. R은 전체 UTR probability heatmap,
+bin 크기 대비 상대 농축 heatmap, cluster 평균 구성과 cluster 내부 변이를 생성합니다.
+정확히 어떤 UTR가 어느 cluster에 들어갔는지는
+`all_utr_profile_assignments.csv`에서 확인합니다. 자세한 설명은
+[전체 UTR 6-bin 분포 시각화](docs/ALL_UTR_PROFILE_QC_KO.md)를 보세요.
 
 ## Scoring 계산을 5단계 CSV로 확인
 

@@ -398,6 +398,7 @@ def load_count_matrix(
             {
                 "sample_id": sample_id,
                 "sample_type": sample["sample_type"],
+                "bin_number": sample["bin_number"],
                 "population_fraction_used": sample["population_fraction"],
                 "population_fraction_source": sample["population_fraction_source"],
                 "cells_collected_reported": sample["cells_collected"],

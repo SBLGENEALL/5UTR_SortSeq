@@ -478,11 +478,22 @@ results/sortseq/figures/metric_comparison/22_score_rank_vs_top15_rank.png
 results/sortseq/figures/metric_comparison/23_top_candidate_overlap.png
 results/sortseq/figures/metric_comparison/24_discordant_candidate_bin_heatmap.png
 results/sortseq/figures/metric_comparison/metric_comparison_figures.pdf
+results/sortseq/figures/all_utr_profiles/25_all_utr_bin_probability_heatmap.png
+results/sortseq/figures/all_utr_profiles/26_all_utr_relative_enrichment_heatmap.png
+results/sortseq/figures/all_utr_profiles/27_profile_cluster_composition.png
+results/sortseq/figures/all_utr_profiles/28_profile_cluster_variability.png
+results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 ```
 
 09번은 절대 cell fraction이고, 10번은 `log2(probability / bin fraction)`입니다.
 따라서 bin3처럼 원래 더 큰 bin이 09번에서 밝게 보이더라도, 10번에서는 실제 상대
 농축이 bin1 또는 bin2인지 바로 확인할 수 있습니다.
+
+25–28번은 top 후보만이 아니라 `top15_read_support_pass=TRUE`인 전체 UTR를 보여줍니다.
+Python 환경에서 먼저 `bash run_pipeline.sh profile-qc`를 실행해야 합니다. 25번은 절대
+bin probability, 26번은 bin 기본 크기 대비 상대 농축, 27번은 유사 분포 cluster의
+평균 구성, 28번은 cluster 내부의 개별 UTR 변이입니다. 상세 해석은
+[전체 UTR 6-bin 분포 시각화](ALL_UTR_PROFILE_QC_KO.md)를 보세요.
 
 ## 중단 후 재개하는 방법
 
