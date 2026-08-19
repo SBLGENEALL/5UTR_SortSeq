@@ -120,6 +120,10 @@ results/sortseq/high_candidates.tsv
 results/sortseq/strict_coverage_results.tsv
 results/sortseq/high_confidence_candidates.tsv
 results/sortseq/reference_comparison.tsv
+results/sortseq/high15_primary_ranking.csv
+results/sortseq/high15_candidates.csv
+results/sortseq/top_candidates_for_cloning.csv
+results/sortseq/top50_candidates_for_cloning.csv
 results/sortseq/top15_enrichment_ranking.csv
 results/sortseq/top15_candidates.csv
 results/sortseq/top15_priority_candidates.csv
@@ -133,8 +137,8 @@ results/sortseq/figures/strict/strict_candidate_figures.pdf
 results/sortseq/figures/top15/top15_candidate_figures.pdf
 ```
 
-`original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 score 차이와
-high15 fold가 표에 추가되고, scatter/heatmap/score-distribution/unsorted-gate 그림에는
+`original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 High15와
+보조 score 차이가 표에 추가되고, scatter/heatmap/score-distribution/unsorted-gate 그림에는
 빨간 별 또는 선으로 표시됩니다. Rescue와 LibraryQC를 유지하고 Python 분석만
 다시 만들려면 다음을 실행합니다.
 
@@ -148,18 +152,22 @@ bash run_pipeline.sh plot
 기존 `results/sortseq`은 `archive/`로 이동되며 raw FASTQ, rescue, LibraryQC 결과는
 수정되지 않습니다.
 
-## bin1·bin2 중심 top15 hit 랭킹
+## High15 primary ranking과 cloning 후보
 
-v0.1.9부터 평균 분포를 나타내는 기존 `expected_bin_score`와 별도로, bin1+bin2의
-UTR frequency를 whole unsorted와 비교한 `top15_vs_unsorted_log2_enrichment`를
-주 hit-selection rank로 제공합니다. bin1·2에 임의로 큰 ordinal weight를 주지 않고,
-두 high bin의 실제 population fraction으로 합친 뒤 unsorted representation으로
-나눕니다.
+v0.2.0부터 cloning 후보의 1차 지표는 target gate 내부의
+`high15_probability = P(bin1 또는 bin2 | UTR, mCherry+/GFP-)`입니다.
+`expected_bin_score`는 전체 6-bin 이동을 확인하는 보조 지표이고,
+`top15_vs_unsorted_log2_enrichment`는 gate representation이 포함된 탐색/QC 지표입니다.
 
-기본 read support는 `unsorted >= 50`, `total six bins >= 200`,
-`bin1+bin2 >= 20`입니다. bin1과 bin2가 모두 unsorted보다 농축되고 original보다
-combined enrichment가 큰 UTR를 후보로 표시합니다. 자세한 식, 결과 열, 문헌 근거는
-[bin1·bin2 중심 고발현 랭킹](docs/TOP15_ENRICHMENT_KO.md)을 보세요.
+기본 eligibility는 `unsorted >= 50`, `total six bins >= 200`, `bin1+bin2 >= 20`입니다.
+각 bin의 variant count vector를 1,000회 기술적 read-bootstrap하여
+`log2(High15/original High15)`의 10th percentile로 robust rank를 만듭니다. 이 bootstrap은
+PCR 또는 biological uncertainty를 추정하지 않습니다. bin1과 bin2의 개별 unsorted
+enrichment는 hard filter로 사용하지 않습니다.
+
+최종 `top_candidates_for_cloning.csv`에는 안정적인 tier1 clean high-shift와 tier2
+high-tail 후보가 High15 순으로 들어갑니다. 자세한 식과 열 해석은
+[High15 중심 고발현 랭킹](docs/TOP15_ENRICHMENT_KO.md)을 보세요.
 
 ## UTR A형 high+low-tail 분포 QC
 
@@ -173,11 +181,11 @@ Python 환경에서 QC를 실행한 뒤 R 환경에서 기존 `plot` 명령을 �
 `results/sortseq/figures/bimodality/`에 17–20번 그림과 PDF가 생성됩니다. 자세한 기준과
 해석은 [UTR A형 양극화 분포 QC](docs/BIMODALITY_QC_KO.md)를 보세요.
 
-## Expected score와 top15 enrichment 직접 비교
+## Expected score와 High15 probability 직접 비교
 
 `bash run_pipeline.sh compare-metrics`는 6개 bin total raw count가 200 이하인 UTR를
-제외하고, 동일한 read-supported UTR 집합에서 expected score와 bin1+bin2 unsorted
-enrichment의 Spearman 상관성, Top 20/50/100 overlap, original 대비 일치/불일치 후보를
+제외하고, 동일한 read-supported UTR 집합에서 expected score와 conditional
+High15 probability의 Spearman 상관성, Top 20/50/100 overlap, original 대비 일치/불일치 후보를
 계산합니다. R `plot`을 다시 실행하면 `figures/metric_comparison/`에 21–24번 그림이
 생성됩니다. 자세한 해석은
 [두 scoring 방식 직접 비교](docs/METRIC_COMPARISON_KO.md)를 보세요.
@@ -202,7 +210,8 @@ results/sortseq/scoring_steps/04_within_utr_bin_probability.csv
 results/sortseq/scoring_steps/05_score_contributions_and_final_score.csv
 results/sortseq/scoring_steps/06_all_steps_combined_audit.csv
 results/sortseq/scoring_steps/07_calculation_checks.csv
-results/sortseq/scoring_steps/08_top15_unsorted_enrichment_ranking.csv
+results/sortseq/scoring_steps/08_high15_primary_ranking.csv
+results/sortseq/scoring_steps/09_top15_unsorted_enrichment_secondary.csv
 ```
 
 여기서 `binN_probability`는 sequencing read가 그 bin에 들어갈 확률이 아니라,
@@ -210,10 +219,10 @@ depth와 bin size를 보정한 뒤 추정한
 `P(bin N | 해당 UTR, mCherry+/GFP- gate)`입니다. 한 UTR의 bin1–6 probability 합은
 1이며, 이 probability에 `6,5,4,3,2,1`을 곱한 합이 expected bin score입니다.
 
-## Strict coverage와 최종 후보 그림
+## 기존 strict score QC와 보조 그림
 
-기본 `pass_coverage`는 전체 탐색표를 보존하기 위한 느슨한 기준입니다. 최종 후보에는
-다음 strict filter가 추가로 적용됩니다.
+기본 `pass_coverage`는 전체 탐색표를 보존하기 위한 느슨한 기준입니다. 기존 score
+중심 분석의 강한 read-support QC에는 다음 strict filter가 유지됩니다.
 
 ```text
 unsorted count >= max(1,000, 전체 UTR 중앙값의 10%)
@@ -235,6 +244,9 @@ v0.1.7의 R 그림은 `unsorted >= 100`, `total six bins >= 500`, `bin1+2 >= 50`
 `detected bins >= 3`을 만족하는 UTR를 **read-supported exploratory** 후보로 표시합니다.
 `unsorted >= 200`, `total >= 1,000`, `bin1+2 >= 100`인 strong-support UTR는 별도
 색으로 표시하며, strong-support high 후보가 0개라는 사실도 그대로 보존합니다.
+
+이 strict score 표는 v0.2.0의 High15 cloning primary rank를 대체하지 않습니다.
+실제 cloning 우선순위는 `top_candidates_for_cloning.csv`와 `candidate_tier`를 봅니다.
 
 특히 두 heatmap을 구분해서 봅니다.
 

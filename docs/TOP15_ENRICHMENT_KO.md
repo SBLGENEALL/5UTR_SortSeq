@@ -1,95 +1,128 @@
-# bin1·bin2 중심 고발현 5′UTR 랭킹
+# High15 중심 고발현 5′UTR 후보 랭킹
 
-## 왜 별도 랭킹을 사용하는가
+## 결론
 
-`expected_bin_score`는 여섯 bin의 전체 분포를 한 숫자로 요약합니다. 따라서 bin3에
-많이 존재하는 안정적인 intermediate-high UTR도 높은 점수를 받을 수 있습니다.
-이번 실험의 hit-selection 목표는 평균적인 위치보다 **가장 높은 mCherry 구간인
-bin1+bin2에 unsorted보다 농축된 UTR**을 찾는 것입니다.
+이번 파이프라인의 cloning 후보 **1차 순위**는 다음 값입니다.
 
-기존 `expected_bin_score`를 삭제하거나 bin1·bin2에 임의의 큰 숫자를 주지 않습니다.
-두 지표를 다음처럼 역할별로 분리합니다.
+```text
+High15 probability = P(bin1 또는 bin2 | UTR, mCherry+/GFP- target gate)
+```
 
-| 지표 | 답하는 질문 |
-|---|---|
-| `expected_bin_score` | target gate 안에서 전체적으로 어느 fluorescence 위치에 있는가? |
-| `top15_vs_unsorted_log2_enrichment` | whole unsorted와 비교해 bin1+bin2에 얼마나 농축됐는가? |
+`expected_bin_score`는 전체 6-bin 분포가 high 방향으로 이동했는지 확인하는
+**보조 지표**입니다. Whole unsorted를 분모로 한 enrichment는 target-gate
+representation까지 섞이므로 primary rank가 아니라 별도 QC/탐색 지표로 남깁니다.
 
 ## 계산식
 
-UTR `i`의 sample별 raw count를 `c`, 해당 sample 전체 assigned UTR read를 `N`이라
-하면 depth-normalized frequency는 다음과 같습니다.
+UTR `i`, bin `b`의 raw count를 `c_ib`, bin 전체 assigned read를 `N_b`, sorter
+population fraction을 `w_b`라 정의합니다.
 
 ```text
-f_i1 = c_i1 / N_1
-f_i2 = c_i2 / N_2
-u_i  = c_iu / N_u
+1. Depth normalization       f_ib = c_ib / N_b
+2. Bin-size correction       a_ib = w_b × f_ib
+3. Within-UTR normalization  p_ib = a_ib / Σ_k a_ik
+4. Primary endpoint          H_i  = p_i1 + p_i2
+5. Supporting score          S_i  = 6p_i1 + 5p_i2 + 4p_i3 + 3p_i4 + 2p_i5 + p_i6
 ```
 
-bin1과 bin2의 sorter fraction을 각각 `w1`, `w2`라 하면 combined top-bin frequency는:
+현재 `w=(0.05, 0.10, 0.15, 0.20, 0.30, 0.20)`이며, 따라서 pool-neutral
+High15는 `0.15`입니다. `original/orginal`이 검출되면 pool 0.15 대신 reference의
+실제 `H_original`과 비교합니다.
 
 ```text
-f_high15 = (w1 × f_i1 + w2 × f_i2) / (w1 + w2)
+high15_fold_vs_reference      = H_i / H_original
+high15_log2_fold_vs_reference = log2(H_i / H_original)
 ```
 
-현재 nominal fraction에서는 `w1=0.05`, `w2=0.10`, `w1+w2=0.15`입니다. 최종
-unsorted 대비 enrichment와 log2 enrichment는:
+이 비율은 fluorescence의 배수 증가가 아닙니다. “reference보다 top 15% 구간에
+들어갈 추정 비율이 몇 배인가”라는 뜻입니다.
+
+## Unsorted 지표를 분리하는 이유
 
 ```text
-top15_vs_unsorted_enrichment      = f_high15 / u_i
-top15_vs_unsorted_log2_enrichment = log2(f_high15 / u_i)
+A_i = Σ_b w_b f_ib
+G_i = A_i / u_i
+E_i = top15_vs_unsorted_enrichment
+    = G_i × H_i / 0.15
 ```
 
-0 count에서 무한값이 생기지 않도록 sample frequency에는 기본 pseudocount 0.5를
-적용합니다.
+`E_i`에는 순수한 high-tail 위치 `H_i`뿐 아니라 whole unsorted 대비 target-gate
+representation `G_i`도 포함됩니다. 이 실험에서 whole unsorted는 동일 시점·동일
+세포군의 유용한 QC이지만, 목표가 target gate 내부의 mCherry-high UTR 선택이므로
+`H_i`를 primary로 사용합니다. `G_i`와 `E_i`는 결과에서 삭제하지 않습니다.
 
-| log2 enrichment | 해석 |
-|---:|---|
-| 0 | unsorted와 같은 representation |
-| 0.585 | 1.5배 농축 |
-| 1 | 2배 농축 |
-| 2 | 4배 농축 |
+## Read-support eligibility
 
-## 후보와 priority 후보
-
-기본 read-support 조건은 다음과 같습니다.
+기본값은 다음과 같습니다.
 
 ```text
-unsorted count >= 50
-total six-bin count >= 200
+unsorted raw count >= 50
+six-bin total raw count >= 200
 bin1 + bin2 raw count >= 20
 ```
 
-`top15_candidate_flag=TRUE`가 되려면 read support를 통과하고, bin1과 bin2가 각각
-unsorted 대비 1배 이상이며, combined top15 enrichment가 original보다 커야 합니다.
-Reference가 없으면 pool-neutral 값인 1을 comparator로 사용합니다.
+이는 dropout과 극단적으로 희소한 UTR를 제외하는 실용적 eligibility filter이며,
+통계적 유의성이나 정밀도를 보장하는 cutoff가 아닙니다.
 
-`top15_priority_candidate_flag=TRUE`는 위 조건에 더해
-`single_bin_jackpot_suspect=FALSE`인 후보입니다. Jackpot flag가 있는 UTR도 결과에서
-삭제하지 않고 review 대상으로 남깁니다.
+## 기술적 bootstrap과 최종 순위
 
-Biological replicate가 하나뿐이므로 이 flag는 통계적으로 유의한 hit 또는 FDR을
-뜻하지 않습니다. 개별 construct flow cytometry 검증을 위한 exploratory rank입니다.
-
-## 결과 파일
-
-Python 분석 후 다음 UTF-8 CSV가 생성됩니다.
+기본 1,000회 bootstrap에서 각 bin의 전체 variant count vector를 원래 read depth로
+multinomial resampling하고, 위 1–4단계를 다시 계산합니다.
 
 ```text
-results/sortseq/top15_enrichment_ranking.csv
-results/sortseq/top15_candidates.csv
-results/sortseq/top15_priority_candidates.csv
+high15_robust_rank_score
+  = bootstrap log2(H_i / H_original)의 10th percentile
+
+high15_final_rank
+  = high15_robust_rank_score 내림차순 순위
 ```
 
-- `top15_enrichment_ranking.csv`: read-support를 통과한 전체 UTR를 top15 enrichment 순 정렬
-- `top15_candidates.csv`: bin1·2 일관성 및 comparator 조건을 통과한 후보
-- `top15_priority_candidates.csv`: jackpot suspect를 제외한 우선 검증 후보
+함께 제공되는 값:
 
-R plotting 후에는 다음 파일이 추가됩니다.
+- `high15_bootstrap_probability_above_comparator`: resample 중 `H_i>H_original`인 비율
+- `high15_bootstrap_top_n_frequency`: resample 중 High15 Top N에 포함된 비율
+- `high15_technical_stability_pass`: 기본적으로 reference 우위 확률이 0.90 이상
+
+이 bootstrap은 **NGS read sampling 안정성만** 반영합니다. PCR bias, cell sampling,
+biological variation을 추정하지 않으며 biological confidence interval, p-value 또는
+FDR로 표현하지 않습니다. PCR은 필요한 실험 단계로 인정하고, 낮은 cycle로 줄인
+편향은 한계로 기록한 뒤 최종 후보를 개별 cloning으로 검증합니다.
+
+## 후보 tier
+
+| tier | 조건 | 사용법 |
+|---|---|---|
+| `tier1_clean_high_shift` | read support + High15가 reference 초과 + 기술적 안정성 + jackpot 아님 + weighted score도 reference 초과 | 우선 cloning |
+| `tier2_high_tail` | 위 조건 중 weighted score support만 없음 | high-tail 후보로 cloning/분포 검토 |
+| `tier3_review` | point estimate는 reference 초과하나 bootstrap 또는 jackpot 경고 존재 | 예비 후보, 낮은 우선순위 |
+| `not_candidate` | reference 비초과 또는 eligibility 불충족 | 현재 cloning list 제외 |
+
+`bin1`과 `bin2`가 각각 unsorted보다 농축되어야 한다는 조건은 후보 필터에 쓰지
+않습니다. 매우 강한 UTR는 bin2를 지나 bin1에 집중되어 bin2가 오히려 감소할 수
+있기 때문입니다. `top15_both_bins_enriched`는 진단 열로만 남습니다.
+
+## 핵심 결과 파일
 
 ```text
-results/sortseq/figures/top15/13_bin1_bin2_unsorted_enrichment.png
-results/sortseq/figures/top15/14_top15_enrichment_vs_expected_score.png
+results/sortseq/high15_primary_ranking.csv
+results/sortseq/high15_candidates.csv
+results/sortseq/top_candidates_for_cloning.csv
+results/sortseq/top50_candidates_for_cloning.csv
+results/sortseq/utr_results_full.tsv
+```
+
+- `high15_primary_ranking.csv`: eligibility 통과 UTR 전체의 robust High15 순위
+- `high15_candidates.csv`: High15 point estimate가 comparator보다 높은 전체 후보
+- `top_candidates_for_cloning.csv`: tier1·tier2만 모은 실제 cloning 우선순위
+- `default_top_n_cloning_shortlist=TRUE`: 기본 robust-rank Top 50 중 tier1·tier2인 행
+- `top50_candidates_for_cloning.csv`: 위 TRUE 행만 바로 연 파일(Top N 설정 변경 시 파일명도 변경)
+- `top15_enrichment_ranking.csv`: 과거 workflow 호환용 별칭이며 내용은 새 High15 순위
+
+R plotting 결과:
+
+```text
+results/sortseq/figures/top15/13_high15_bin1_bin2_structure.png
+results/sortseq/figures/top15/14_high15_probability_vs_weighted_score.png
 results/sortseq/figures/top15/15_top15_ranked_bin_probability_heatmap.png
 results/sortseq/figures/top15/16_top15_reference_position.png
 results/sortseq/figures/top15/top15_candidate_figures.pdf
@@ -97,27 +130,31 @@ results/sortseq/figures/top15/top15_candidate_figures.pdf
 
 ## 기존 결과에서 다시 계산
 
-Rescue와 LibraryQC는 다시 실행하지 않습니다. Python 환경과 R 환경이 분리되어 있으므로
-다음처럼 나누어 실행합니다.
+Rescue와 LibraryQC는 다시 실행하지 않습니다.
 
 ```bash
-# Python 환경: 기존 sortseq 결과만 archive하고 step 4 재계산
+# Python 환경
 bash run_pipeline.sh reanalyze-analysis
 
-# R 환경: 새 표에서 step 5 그림 생성
+# 별도 R 환경
 bash run_pipeline.sh plot
 ```
 
-## 참고한 분석 방식
+기존 `results/sortseq`만 `archive/`로 이동되고 FASTQ, index rescue,
+`results/library_qc`는 유지됩니다.
 
-- Cao et al. (2021)은 5′UTR library를 상위 GFP bin들로 sorting한 뒤 각 top bin을
-  unsorted에 대한 log2 enrichment로 비교하고, 모든 top bin에서 일관되게 농축된
-  후보를 검증했습니다.
-  <https://www.nature.com/articles/s41467-021-24436-7>
-- Matreyek et al. (2018)의 VAMP-seq 방식은 모든 bin 분포의 weighted average를 사용해
-  평균 phenotype을 추정합니다. 이는 현재의 `expected_bin_score`에 해당하는 보조
-  관점입니다. <https://pmc.ncbi.nlm.nih.gov/articles/PMC5980760/>
-- Peterman and Levine (2016)은 top threshold enrichment와 mean fluorescence가 서로
-  다른 요약이며, cell-to-cell variability에 따라 관계가 달라질 수 있음을 설명합니다.
-  <https://link.springer.com/article/10.1186/s12864-016-2533-5>
+## 해석 한계와 후속 검증
 
+Biological replicate가 없으므로 이 결과는 개별 construct 검증을 위한
+prioritization입니다. `significant`, FDR, “translation rate가 증가했다”, 또는
+fluorescence가 몇 배 증가했다는 결론에는 사용할 수 없습니다. 최종 판단은
+상위 tier와 분포가 서로 다른 후보를 포함해 single-clone flow cytometry로 검증합니다.
+
+## 분석 방식 참고
+
+- Matreyek et al. (2018): 여러 fluorescence bin의 variant 분포를 weighted average로
+  요약하는 방식. <https://pmc.ncbi.nlm.nih.gov/articles/PMC5980760/>
+- Peterman and Levine (2016): threshold/high-tail enrichment와 mean fluorescence가
+  서로 다른 phenotype 요약일 수 있음을 설명. <https://link.springer.com/article/10.1186/s12864-016-2533-5>
+- Cao et al. (2021): pooled 5′UTR library에서 상위 fluorescence bin enrichment를
+  후보 선별에 활용한 사례. <https://www.nature.com/articles/s41467-021-24436-7>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare whole-distribution score with bin1+bin2 enrichment rankings."""
+"""Compare the High15 primary endpoint with the six-bin supporting score."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from scipy.stats import kendalltau, pearsonr, spearmanr
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare expected-bin score and top-15% enrichment after a shared "
+            "Compare expected-bin score and conditional High15 probability after a shared "
             "six-bin total-read filter."
         )
     )
@@ -97,7 +97,6 @@ def analyze_metric_comparison(
         "high_bin_raw_count",
         "expected_bin_score",
         "high15_probability",
-        "top15_vs_unsorted_log2_enrichment",
         *probability_columns,
     }
     missing = sorted(required.difference(result.columns))
@@ -115,15 +114,16 @@ def analyze_metric_comparison(
         "high_bin_raw_count",
         "expected_bin_score",
         "high15_probability",
-        "top15_vs_unsorted_log2_enrichment",
         *probability_columns,
     ]
+    if "top15_vs_unsorted_log2_enrichment" in output.columns:
+        numeric_columns.append("top15_vs_unsorted_log2_enrichment")
     for column in numeric_columns:
         output[column] = pd.to_numeric(output[column], errors="coerce")
 
     finite_metrics = (
         np.isfinite(output["expected_bin_score"])
-        & np.isfinite(output["top15_vs_unsorted_log2_enrichment"])
+        & np.isfinite(output["high15_probability"])
     )
     output["total_count_filter_pass"] = (
         output["total_6bin_count"] >= min_total_count
@@ -140,15 +140,15 @@ def analyze_metric_comparison(
     supported["score_rank_filtered"] = supported["expected_bin_score"].rank(
         method="min", ascending=False
     )
-    supported["top15_rank_filtered"] = supported[
-        "top15_vs_unsorted_log2_enrichment"
-    ].rank(method="min", ascending=False)
+    supported["top15_rank_filtered"] = supported["high15_probability"].rank(
+        method="min", ascending=False
+    )
     supported["score_rank_percentile"] = supported["expected_bin_score"].rank(
         method="average", pct=True
     )
-    supported["top15_rank_percentile"] = supported[
-        "top15_vs_unsorted_log2_enrichment"
-    ].rank(method="average", pct=True)
+    supported["top15_rank_percentile"] = supported["high15_probability"].rank(
+        method="average", pct=True
+    )
     supported["score_rank_minus_top15_rank"] = (
         supported["score_rank_filtered"] - supported["top15_rank_filtered"]
     )
@@ -187,14 +187,12 @@ def analyze_metric_comparison(
         raise ValueError("more than one reference variant was identified")
     if len(reference) == 1:
         reference_score = float(reference["expected_bin_score"].iloc[0])
-        reference_top15 = float(
-            reference["top15_vs_unsorted_log2_enrichment"].iloc[0]
-        )
+        reference_top15 = float(reference["high15_probability"].iloc[0])
         supported["score_above_reference_filtered"] = (
             supported["expected_bin_score"] > reference_score
         )
         supported["top15_above_reference_filtered"] = (
-            supported["top15_vs_unsorted_log2_enrichment"] > reference_top15
+            supported["high15_probability"] > reference_top15
         )
         supported["reference_quadrant"] = np.select(
             [
@@ -249,16 +247,19 @@ def analyze_metric_comparison(
     def add_correlation_rows(scope: str, table: pd.DataFrame) -> None:
         pairs = [
             (
-                "expected_score_vs_top15_unsorted_log2",
-                table["expected_bin_score"],
-                table["top15_vs_unsorted_log2_enrichment"],
-            ),
-            (
                 "expected_score_vs_high15_probability",
                 table["expected_bin_score"],
                 table["high15_probability"],
             ),
         ]
+        if "top15_vs_unsorted_log2_enrichment" in table.columns:
+            pairs.append(
+                (
+                    "expected_score_vs_top15_unsorted_log2_secondary",
+                    table["expected_bin_score"],
+                    table["top15_vs_unsorted_log2_enrichment"],
+                )
+            )
         for comparison, left, right in pairs:
             for method in ["spearman", "pearson", "kendall"]:
                 statistic, pvalue, n = safe_correlation(left, right, method)
@@ -318,7 +319,7 @@ def analyze_metric_comparison(
             supported["top_list_membership"].eq("top15_only").sum()
         ),
         "reference_score": reference_score,
-        "reference_top15_log2_enrichment": reference_top15,
+        "reference_high15_probability": reference_top15,
     }
     for key, value in counts.items():
         summary_rows.append(
@@ -357,7 +358,7 @@ def analyze_metric_comparison(
         (summary_table["scope"] == "robust_read_support")
         & (
             summary_table["metric"]
-            == "spearman_expected_score_vs_top15_unsorted_log2"
+            == "spearman_expected_score_vs_high15_probability"
         )
     ]
     primary_rho = (
@@ -379,10 +380,9 @@ def analyze_metric_comparison(
         "top_n_overlap_percent": overlap_percent,
         "agreement_class": agreement,
         "recommended_interpretation": (
-            "Use top15 enrichment as the primary endpoint when the goal is the "
-            "extreme-high fraction; use expected score for the average full-bin "
-            "position. Prioritize consensus candidates above reference in both, "
-            "then review discordant profiles and low-tail probability."
+            "Use conditional High15 probability as the primary endpoint for "
+            "cloning priority. Use expected score as supporting evidence for a "
+            "clean whole-distribution high shift; do not require Top-N overlap."
         ),
     }
 

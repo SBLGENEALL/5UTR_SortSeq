@@ -51,7 +51,7 @@ class CompareMetricsTest(unittest.TestCase):
                 row("excluded_200", 200, 100, 50, 6.0, 6.0, 0.60),
                 row("orginal", 500, 100, 50, 3.0, 0.0, 0.15, True),
                 row("both_high", 500, 100, 50, 5.0, 3.0, 0.45),
-                row("score_only", 500, 100, 50, 4.5, -1.0, 0.30),
+                row("score_only", 500, 100, 50, 4.5, -1.0, 0.10),
                 row("top15_only", 500, 100, 50, 2.5, 2.0, 0.35),
                 row("both_low", 500, 100, 50, 2.0, -2.0, 0.05),
                 row("low_unsorted", 500, 10, 50, 5.5, 5.0, 0.55),
@@ -98,10 +98,10 @@ class CompareMetricsTest(unittest.TestCase):
 
     def test_missing_metric_fails(self):
         with self.assertRaisesRegex(
-            ValueError, "top15_vs_unsorted_log2_enrichment"
+            ValueError, "high15_probability"
         ):
             analyze_metric_comparison(
-                self.input.drop(columns=["top15_vs_unsorted_log2_enrichment"])
+                self.input.drop(columns=["high15_probability"])
             )
 
 

@@ -97,9 +97,12 @@ class ScoringStepExportTests(unittest.TestCase):
                 places=10,
             )
             ranking = pd.read_csv(
-                output / "08_top15_unsorted_enrichment_ranking.csv"
+                output / "08_high15_primary_ranking.csv"
             )
             self.assertEqual(ranking.iloc[0]["variant_id"], "high")
+            self.assertTrue(
+                (output / "09_top15_unsorted_enrichment_secondary.csv").exists()
+            )
 
 
 if __name__ == "__main__":
