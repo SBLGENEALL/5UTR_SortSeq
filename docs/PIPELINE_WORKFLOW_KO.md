@@ -332,31 +332,35 @@ results/sortseq/utr_results_full.tsv
 results/sortseq/high_candidates.tsv
 results/sortseq/strict_coverage_results.tsv
 results/sortseq/high_confidence_candidates.tsv
+results/sortseq/high15_primary_ranking.csv
+results/sortseq/top_candidates_for_cloning.csv
 results/sortseq/easy_report.html
 ```
 
 ### 결과를 보는 순서
 
 1. `pass_coverage=TRUE`
-2. `expected_bin_score`: 6에 가까울수록 높은 mCherry
-3. `high15_probability`: bin1+bin2에 있을 추정 확률
-4. `high15_enrichment`: 1이면 pool 평균, 1보다 크면 high 쪽 농축
-5. `top15_vs_unsorted_log2_enrichment`: bin1+2의 whole-unsorted 대비 농축도;
-   고발현 hit-selection의 주 랭킹
+2. `high15_final_rank`: cloning 후보의 primary robust rank
+3. `high15_probability`: target gate 내부에서 bin1+bin2에 있을 추정 확률
+4. `candidate_tier`: tier1 clean shift, tier2 high tail, tier3 review
+5. `expected_bin_score`: 전체 6-bin 위치를 나타내는 supporting metric
 6. `most_enriched_bin`과 bin1–6 probability 분포
-7. `expression_tier`: 정확한 개별 등수보다 top 1/5/10% tier 중심
+7. technical bootstrap 안정성과 single-bin jackpot flag
 8. whole unsorted 대비 target-gate representation은 보조 QC로 사용
 
-최종 hit 목록은 permissive `pass_coverage`가 아니라 다음 strict filter를 추가로
-통과한 UTR를 사용합니다.
+최종 High15 후보의 eligibility와 안정성 기준은 다음과 같습니다.
 
 ```text
-unsorted >= max(1,000, 전체 중앙값의 10%)
-total six bins >= max(5,000, 전체 중앙값의 10%)
-bin1 + bin2 raw support >= 200
-3개 이상의 bin에서 검출
-single-bin jackpot suspect 제외
+unsorted >= 50
+total six bins >= 200
+bin1 + bin2 raw support >= 20
+High15 > original
+bootstrap에서 reference 우위 확률 >= 0.90
+single-bin jackpot suspect는 tier3 review
 ```
+
+기존 strict score filter는 강한 read-support QC/보조 결과로 유지되지만 새 High15
+primary rank의 hard filter는 아닙니다.
 
 Whole unsorted는 별도 기준 sample이므로 `population_fraction`을 비워 둡니다.
 주 fluorescence score는 6개 bin 내부 분포에서 계산합니다.
@@ -370,7 +374,7 @@ LibraryQC의 `variant_count_matrix.csv`를 사용해 전체 UTR의 중간 계산
 bash run_pipeline.sh scoring-steps
 ```
 
-기존 rescue/LibraryQC를 유지하고 v0.1.9 top15 랭킹만 다시 계산할 때는 환경을
+기존 rescue/LibraryQC를 유지하고 v0.2.0 High15 랭킹만 다시 계산할 때는 환경을
 나누어 실행합니다.
 
 ```bash
@@ -397,7 +401,7 @@ bash run_pipeline.sh bimodality-qc
 검사하고 read-count 구간별 양극화 후보 비율을 계산합니다. 기준과 해석은
 [BIMODALITY_QC_KO.md](BIMODALITY_QC_KO.md)를 참조하세요.
 
-Expected score와 bin1+bin2 enrichment 중 어느 endpoint가 적합한지 비교하려면 Python
+Expected score와 conditional High15 probability의 관계를 비교하려면 Python
 환경에서 다음을 실행합니다.
 
 ```bash
@@ -465,7 +469,11 @@ results/sortseq/figures/bimodality/18_bimodal_fraction_by_read_count.png
 results/sortseq/figures/bimodality/19_high_vs_low_tail_probability.png
 results/sortseq/figures/bimodality/20_clear_bimodal_bin_probability_heatmap.png
 results/sortseq/figures/bimodality/bimodality_qc_figures.pdf
-results/sortseq/figures/metric_comparison/21_expected_score_vs_top15_enrichment.png
+results/sortseq/figures/top15/13_high15_bin1_bin2_structure.png
+results/sortseq/figures/top15/14_high15_probability_vs_weighted_score.png
+results/sortseq/figures/top15/15_top15_ranked_bin_probability_heatmap.png
+results/sortseq/figures/top15/16_top15_reference_position.png
+results/sortseq/figures/metric_comparison/21_expected_score_vs_high15_probability.png
 results/sortseq/figures/metric_comparison/22_score_rank_vs_top15_rank.png
 results/sortseq/figures/metric_comparison/23_top_candidate_overlap.png
 results/sortseq/figures/metric_comparison/24_discordant_candidate_bin_heatmap.png

@@ -35,7 +35,7 @@ overlap_table <- read.csv(
 )
 
 numeric_columns <- c(
-  "expected_bin_score", "top15_vs_unsorted_log2_enrichment",
+  "expected_bin_score", "high15_probability",
   "score_rank_filtered", "top15_rank_filtered",
   "score_rank_minus_top15_rank", "total_6bin_count",
   "high15_probability", paste0("bin", 1:6, "_probability")
@@ -114,15 +114,12 @@ summary_value <- function(metric, scope = NULL) {
 }
 
 rho <- summary_value(
-  "spearman_expected_score_vs_top15_unsorted_log2", "robust_read_support"
-)
-rho_probability <- summary_value(
   "spearman_expected_score_vs_high15_probability", "robust_read_support"
 )
 configured_top_n <- summary_value("configured_top_n")
 actual_top_n <- summary_value("actual_top_n")
 reference_score <- summary_value("reference_score")
-reference_top15 <- summary_value("reference_top15_log2_enrichment")
+reference_top15 <- summary_value("reference_high15_probability")
 consensus_n <- summary_value("top_list_consensus_count")
 score_only_n <- summary_value("top_list_score_only_count")
 top15_only_n <- summary_value("top_list_top15_only_count")
@@ -138,7 +135,7 @@ p_metric <- ggplot2::ggplot(
   comparison,
   ggplot2::aes(
     x = expected_bin_score,
-    y = top15_vs_unsorted_log2_enrichment
+    y = high15_probability
   )
 ) +
   ggplot2::geom_point(color = colors[["neither"]], alpha = 0.48, size = 1.5) +
@@ -153,20 +150,21 @@ p_metric <- ggplot2::ggplot(
     drop = FALSE
   ) +
   ggplot2::labs(
-    title = "Whole-distribution score versus top-15% enrichment",
+    title = "Supporting six-bin score versus primary High15 probability",
     subtitle = sprintf(
-      "Same read-supported UTRs; Spearman rho = %.3f (high15 probability rho = %.3f)",
-      rho, rho_probability
+      "Same read-supported UTRs; Spearman rho = %.3f",
+      rho
     ),
     caption = paste0(
       "Total six-bin count > 200; unsorted >= 50; bin1+2 raw count >= 20. ",
-      "Correlation measures agreement, not which endpoint is biologically preferable."
+      "High15 is primary; score summarizes the complete six-bin distribution."
     ),
     x = "Expected bin score (whole six-bin position)",
-    y = "bin1+bin2 vs unsorted log2 enrichment",
+    y = "High15 probability: P(bin1 or bin2 | UTR, target gate)",
     color = sprintf("Top %.0f membership", actual_top_n),
     shape = sprintf("Top %.0f membership", actual_top_n)
   ) +
+  ggplot2::scale_y_continuous(labels = scales::percent) +
   theme_comparison()
 if (is.finite(reference_score)) {
   p_metric <- p_metric + ggplot2::geom_vline(
@@ -186,7 +184,7 @@ if (nrow(reference) == 1) {
     color = colors[["reference"]]
   )
 }
-save_png("21_expected_score_vs_top15_enrichment.png", p_metric)
+save_png("21_expected_score_vs_high15_probability.png", p_metric)
 plots[["21"]] <- p_metric
 
 # 22: rank agreement makes candidate reordering visible without assuming a
@@ -215,7 +213,7 @@ p_rank <- ggplot2::ggplot(
     title = "Rank agreement between the two phenotype summaries",
     subtitle = "The upper-right corner is best by both metrics; the diagonal is identical rank",
     x = "Expected-score rank (1 = best)",
-    y = "Top-15% enrichment rank (1 = best)",
+    y = "High15-probability rank (1 = best)",
     color = sprintf("Top %.0f membership", actual_top_n),
     shape = sprintf("Top %.0f membership", actual_top_n)
   ) +
@@ -331,13 +329,12 @@ if (nrow(discordant) > 0) {
 
 plot_statistics <- data.frame(
   metric = c(
-    "read_supported_utr", "spearman_score_vs_top15_log2",
-    "spearman_score_vs_high15_probability", "configured_top_n",
+    "read_supported_utr", "spearman_score_vs_high15_probability", "configured_top_n",
     "actual_top_n", "top_n_consensus", "top_n_score_only",
     "top_n_top15_only"
   ),
   value = c(
-    nrow(comparison), rho, rho_probability, configured_top_n, actual_top_n,
+    nrow(comparison), rho, configured_top_n, actual_top_n,
     consensus_n, score_only_n, top15_only_n
   ),
   stringsAsFactors = FALSE
@@ -360,4 +357,3 @@ for (plot in plots) {
 grDevices::dev.off()
 
 message("Metric-comparison figures written to: ", normalizePath(output_dir))
-

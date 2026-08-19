@@ -67,6 +67,11 @@ TOP_HIT_MIN_UNSORTED_COUNT="${TOP_HIT_MIN_UNSORTED_COUNT:-50}"
 TOP_HIT_MIN_TOTAL_BIN_COUNT="${TOP_HIT_MIN_TOTAL_BIN_COUNT:-200}"
 TOP_HIT_MIN_HIGH_BIN_COUNT="${TOP_HIT_MIN_HIGH_BIN_COUNT:-20}"
 TOP_HIT_MIN_ENRICHMENT="${TOP_HIT_MIN_ENRICHMENT:-1.0}"
+HIGH15_BOOTSTRAP_REPLICATES="${HIGH15_BOOTSTRAP_REPLICATES:-1000}"
+HIGH15_BOOTSTRAP_SEED="${HIGH15_BOOTSTRAP_SEED:-20260819}"
+HIGH15_BOOTSTRAP_LOWER_QUANTILE="${HIGH15_BOOTSTRAP_LOWER_QUANTILE:-0.10}"
+HIGH15_BOOTSTRAP_TOP_N="${HIGH15_BOOTSTRAP_TOP_N:-50}"
+HIGH15_BOOTSTRAP_MIN_PROBABILITY="${HIGH15_BOOTSTRAP_MIN_PROBABILITY:-0.90}"
 STRICT_MIN_UNSORTED_COUNT="${STRICT_MIN_UNSORTED_COUNT:-1000}"
 STRICT_MIN_TOTAL_BIN_COUNT="${STRICT_MIN_TOTAL_BIN_COUNT:-5000}"
 STRICT_RELATIVE_MEDIAN_FRACTION="${STRICT_RELATIVE_MEDIAN_FRACTION:-0.10}"
@@ -471,7 +476,7 @@ run_analyze() {
     echo "Use 'full --replace' to archive prior outputs and rerun safely." >&2
     exit 2
   fi
-  stage_begin "4/5" "Analyze: bin correction and UTR scoring"
+  stage_begin "4/5" "Analyze: High15 primary ranking + six-bin supporting score"
   mkdir -p "${RESULTS_DIR}/sortseq/input"
   "${PYTHON_BIN}" "${REPO_DIR}/scripts/prepare_libraryqc_sortseq.py" \
     --matrix "${matrix}" \
@@ -488,6 +493,11 @@ run_analyze() {
     --top-hit-min-total-bin-count "${TOP_HIT_MIN_TOTAL_BIN_COUNT}" \
     --top-hit-min-high-bin-count "${TOP_HIT_MIN_HIGH_BIN_COUNT}" \
     --top-hit-min-enrichment "${TOP_HIT_MIN_ENRICHMENT}" \
+    --bootstrap-replicates "${HIGH15_BOOTSTRAP_REPLICATES}" \
+    --bootstrap-seed "${HIGH15_BOOTSTRAP_SEED}" \
+    --bootstrap-lower-quantile "${HIGH15_BOOTSTRAP_LOWER_QUANTILE}" \
+    --bootstrap-top-n "${HIGH15_BOOTSTRAP_TOP_N}" \
+    --bootstrap-min-probability-above-reference "${HIGH15_BOOTSTRAP_MIN_PROBABILITY}" \
     --strict-min-unsorted-count "${STRICT_MIN_UNSORTED_COUNT}" \
     --strict-min-total-bin-count "${STRICT_MIN_TOTAL_BIN_COUNT}" \
     --strict-relative-median-fraction "${STRICT_RELATIVE_MEDIAN_FRACTION}" \
@@ -549,7 +559,7 @@ run_bimodality_qc() {
 run_compare_metrics() {
   local result_table="${RESULTS_DIR}/sortseq/utr_results_full.tsv"
   require_path "${result_table}" "Sort-seq result table"
-  echo "Comparing expected score and top-15% enrichment on a shared read-supported universe"
+  echo "Comparing expected score and conditional High15 probability on a shared read-supported universe"
   "${PYTHON_BIN}" "${REPO_DIR}/scripts/compare_metrics.py" \
     --input "${result_table}" \
     --outdir "${RESULTS_DIR}/sortseq/metric_comparison" \

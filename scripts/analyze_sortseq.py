@@ -67,6 +67,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overall-gate-fraction", type=float, default=0.90)
     parser.add_argument("--top-n", type=int, default=50)
     parser.add_argument(
+        "--bootstrap-replicates",
+        type=int,
+        default=1000,
+        help=(
+            "Multinomial read-resampling replicates for technical High15 rank "
+            "stability. This does not estimate biological or PCR uncertainty."
+        ),
+    )
+    parser.add_argument("--bootstrap-seed", type=int, default=20260819)
+    parser.add_argument("--bootstrap-lower-quantile", type=float, default=0.10)
+    parser.add_argument("--bootstrap-top-n", type=int, default=50)
+    parser.add_argument(
+        "--bootstrap-min-probability-above-reference", type=float, default=0.90
+    )
+    parser.add_argument(
         "--reference-variant-id",
         default="auto",
         help=(
@@ -200,19 +215,21 @@ def load_samples(path: Path) -> pd.DataFrame:
         raise ValueError("population_fraction is required for all six bins")
 
     fraction_index = bins.index
+    # The gate-design fractions describe the proportion of the target-gated
+    # population represented by each simultaneous sort bin.  Collected-event
+    # counts can differ because of recovery/yield and are therefore retained as
+    # QC metadata, not used to silently redefine the phenotype bins.
+    fractions = bins["population_fraction"].astype(float).to_numpy()
+    if fractions.sum() > 1.5:
+        fractions = fractions / 100.0
+    fraction_source = "population_fraction"
+
+    samples["cells_collected_fraction"] = np.nan
     collected = bins["cells_collected"].astype(float)
     if collected.notna().all() and (collected > 0).all():
-        fractions = collected.to_numpy() / collected.sum()
-        fraction_source = "cells_collected"
-    elif collected.notna().any():
-        raise ValueError(
-            "cells_collected must be positive for all six bins or blank for all six bins"
+        samples.loc[fraction_index, "cells_collected_fraction"] = (
+            collected.to_numpy() / collected.sum()
         )
-    else:
-        fractions = bins["population_fraction"].astype(float).to_numpy()
-        if fractions.sum() > 1.5:
-            fractions = fractions / 100.0
-        fraction_source = "population_fraction"
     if (fractions <= 0).any() or not np.isclose(fractions.sum(), 1.0, atol=0.02):
         raise ValueError(
             f"population_fraction values must be positive and sum to 1 (or 100); "
@@ -222,6 +239,127 @@ def load_samples(path: Path) -> pd.DataFrame:
     samples["population_fraction_source"] = "not_applicable"
     samples.loc[fraction_index, "population_fraction_source"] = fraction_source
     return samples
+
+
+def technical_high15_bootstrap(
+    raw_bins: pd.DataFrame,
+    fractions: pd.Series,
+    reference_variant_id: str | None,
+    read_support: pd.Series,
+    replicates: int,
+    seed: int,
+    lower_quantile: float,
+    top_n: int,
+) -> pd.DataFrame:
+    """Estimate read-sampling stability of the conditional High15 endpoint.
+
+    Each bin's complete observed variant composition is resampled with a
+    multinomial distribution at the bin's original read depth.  This propagates
+    finite NGS read sampling through depth normalization, bin-size correction,
+    and within-UTR normalization.  It intentionally does *not* model biological
+    replication, sorted-cell sampling, PCR jackpotting, or other wet-lab bias.
+    """
+    if replicates < 0:
+        raise ValueError("bootstrap_replicates cannot be negative")
+    if not 0 < lower_quantile < 0.5:
+        raise ValueError("bootstrap_lower_quantile must be between 0 and 0.5")
+    if top_n <= 0:
+        raise ValueError("bootstrap_top_n must be positive")
+
+    output = pd.DataFrame(index=raw_bins.index)
+    statistic_columns = [
+        "high15_bootstrap_median",
+        "high15_bootstrap_lower",
+        "high15_bootstrap_upper",
+        "high15_log2_fold_bootstrap_median",
+        "high15_log2_fold_bootstrap_lower",
+        "high15_log2_fold_bootstrap_upper",
+        "high15_bootstrap_probability_above_comparator",
+        "high15_bootstrap_top_n_frequency",
+    ]
+    if replicates == 0:
+        for column in statistic_columns:
+            output[column] = np.nan
+        return output
+
+    depths = raw_bins.sum(axis=0).astype(np.int64)
+    if (depths <= 0).any():
+        raise ValueError("cannot bootstrap an empty bin")
+    fraction_values = fractions.astype(float).to_numpy()
+    rng = np.random.default_rng(seed)
+    n_variants = len(raw_bins)
+    high_mass = np.zeros((replicates, n_variants), dtype=np.float64)
+    total_mass = np.zeros_like(high_mass)
+
+    for bin_position, sample_id in enumerate(raw_bins.columns):
+        depth = int(depths[sample_id])
+        probabilities = raw_bins[sample_id].astype(float).to_numpy() / depth
+        # Guard against harmless floating-point drift before multinomial input.
+        probabilities = probabilities / probabilities.sum()
+        resampled = rng.multinomial(depth, probabilities, size=replicates)
+        mass = (resampled / depth) * fraction_values[bin_position]
+        total_mass += mass
+        if bin_position < 2:
+            high_mass += mass
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        high15 = np.divide(
+            high_mass,
+            total_mass,
+            out=np.full_like(high_mass, np.nan),
+            where=total_mass > 0,
+        )
+
+    if reference_variant_id is not None:
+        if reference_variant_id not in raw_bins.index:
+            raise ValueError(
+                f"bootstrap reference variant not found: {reference_variant_id!r}"
+            )
+        reference_position = raw_bins.index.get_loc(reference_variant_id)
+        comparator = high15[:, reference_position][:, np.newaxis]
+    else:
+        comparator = np.full((replicates, 1), float(fraction_values[:2].sum()))
+
+    epsilon = 1e-12
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log2_fold = np.log2((high15 + epsilon) / (comparator + epsilon))
+
+    upper_quantile = 1.0 - lower_quantile
+    output["high15_bootstrap_median"] = np.nanmedian(high15, axis=0)
+    output["high15_bootstrap_lower"] = np.nanquantile(
+        high15, lower_quantile, axis=0
+    )
+    output["high15_bootstrap_upper"] = np.nanquantile(
+        high15, upper_quantile, axis=0
+    )
+    output["high15_log2_fold_bootstrap_median"] = np.nanmedian(log2_fold, axis=0)
+    output["high15_log2_fold_bootstrap_lower"] = np.nanquantile(
+        log2_fold, lower_quantile, axis=0
+    )
+    output["high15_log2_fold_bootstrap_upper"] = np.nanquantile(
+        log2_fold, upper_quantile, axis=0
+    )
+    output["high15_bootstrap_probability_above_comparator"] = np.nanmean(
+        log2_fold > 0, axis=0
+    )
+
+    support_positions = np.flatnonzero(read_support.reindex(raw_bins.index).to_numpy())
+    inclusion_count = np.zeros(n_variants, dtype=np.int64)
+    actual_top_n = min(top_n, len(support_positions))
+    if actual_top_n > 0:
+        supported_values = high15[:, support_positions]
+        if actual_top_n == len(support_positions):
+            top_positions = np.broadcast_to(
+                support_positions, (replicates, len(support_positions))
+            )
+        else:
+            local_top = np.argpartition(
+                -supported_values, actual_top_n - 1, axis=1
+            )[:, :actual_top_n]
+            top_positions = support_positions[local_top]
+        np.add.at(inclusion_count, top_positions.ravel(), 1)
+    output["high15_bootstrap_top_n_frequency"] = inclusion_count / replicates
+    return output
 
 
 def load_count_matrix(
@@ -260,6 +398,10 @@ def load_count_matrix(
             {
                 "sample_id": sample_id,
                 "sample_type": sample["sample_type"],
+                "population_fraction_used": sample["population_fraction"],
+                "population_fraction_source": sample["population_fraction_source"],
+                "cells_collected_reported": sample["cells_collected"],
+                "cells_collected_fraction_qc": sample["cells_collected_fraction"],
                 "total_reads_in_count_file": float(grouped.sum()),
                 "assigned_reference_reads": float(known.sum()),
                 "detected_reference_variants": int((known > 0).sum()),
@@ -314,6 +456,11 @@ def analyze(
     top_hit_min_total_bin_count: int = 200,
     top_hit_min_high_bin_count: int = 20,
     top_hit_min_enrichment: float = 1.0,
+    bootstrap_replicates: int = 0,
+    bootstrap_seed: int = 20260819,
+    bootstrap_lower_quantile: float = 0.10,
+    bootstrap_top_n: int = 50,
+    bootstrap_min_probability_above_reference: float = 0.90,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     if pseudocount <= 0:
         raise ValueError("pseudocount must be positive")
@@ -339,6 +486,16 @@ def analyze(
         raise ValueError("top-hit count cutoffs cannot be negative")
     if top_hit_min_enrichment <= 0:
         raise ValueError("top_hit_min_enrichment must be positive")
+    if bootstrap_replicates < 0:
+        raise ValueError("bootstrap_replicates cannot be negative")
+    if not 0 < bootstrap_lower_quantile < 0.5:
+        raise ValueError("bootstrap_lower_quantile must be between 0 and 0.5")
+    if bootstrap_top_n <= 0:
+        raise ValueError("bootstrap_top_n must be positive")
+    if not 0 <= bootstrap_min_probability_above_reference <= 1:
+        raise ValueError(
+            "bootstrap_min_probability_above_reference must be between 0 and 1"
+        )
 
     bins = samples[samples["sample_type"].eq("bin")].sort_values("bin_number")
     bin_ids = bins["sample_id"].astype(str).tolist()
@@ -408,11 +565,9 @@ def analyze(
     result["high15_enrichment"] = result["high15_probability"] / high15_fraction
     result["high15_log2_enrichment"] = np.log2(result["high15_enrichment"].clip(lower=1e-12))
 
-    # Candidate-discovery endpoint: composition of the combined highest two
-    # fluorescence bins relative to the whole unsorted population. This is
-    # intentionally distinct from high15_enrichment above, which is conditional
-    # on being inside the target gate. Weighting f_bin1 and f_bin2 by their sorter
-    # fractions reconstructs the UTR frequency in the combined top population.
+    # Secondary/exploratory endpoint: combined high-bin composition relative to
+    # whole unsorted. This includes both conditional High15 position and target-
+    # gate representation, so it is retained for QC but not used as primary rank.
     smooth_high15_frequency = (
         smooth_bins[bin_ids[:2]].mul(fractions.iloc[:2], axis=1).sum(axis=1)
         / high15_fraction
@@ -553,34 +708,44 @@ def analyze(
         & (result["detected_in_n_bins"] <= jackpot_max_detected_bins)
     )
 
-    # Read-supported top-tail ranking. We do not require detection in three or
-    # more bins because a real sharply shifted UTR may legitimately occupy only
-    # bin1 and bin2. Sparse/single-bin behavior remains visible as a review flag.
+    # Primary endpoint: conditional probability of occupying bin1 or bin2 among
+    # cells already inside the mCherry+/GFP- target gate.  Unsorted is retained
+    # for read support and gate-representation QC, but it does not define this
+    # fluorescence ranking.  A real sharp shift can concentrate in bin1 and
+    # deplete bin2, so individual enrichment in both bins is diagnostic only.
     result["top15_read_support_pass"] = (
         (result["unsorted_count"] >= top_hit_min_unsorted_count)
         & (result["total_6bin_count"] >= top_hit_min_total_bin_count)
         & (result["high_bin_raw_count"] >= top_hit_min_high_bin_count)
+        & result["high15_probability"].notna()
     )
     result["top15_both_bins_enriched"] = (
         (result["bin1_vs_unsorted_enrichment"] >= top_hit_min_enrichment)
         & (result["bin2_vs_unsorted_enrichment"] >= top_hit_min_enrichment)
     )
-    top15_rank_values = result["top15_vs_unsorted_log2_enrichment"].where(
+    high15_rank_values = result["high15_probability"].where(
         result["top15_read_support_pass"]
     )
-    result["top15_rank"] = top15_rank_values.rank(ascending=False, method="average")
-    top15_rank_n = int(top15_rank_values.notna().sum())
-    if top15_rank_n > 1:
-        result["top15_percentile"] = 100 * (
-            1 - (result["top15_rank"] - 1) / (top15_rank_n - 1)
-        )
-    elif top15_rank_n == 1:
-        result["top15_percentile"] = np.where(top15_rank_values.notna(), 100.0, np.nan)
-    else:
-        result["top15_percentile"] = np.nan
-    result["top15_above_comparator"] = (
-        result["top15_vs_unsorted_enrichment"] > top_hit_min_enrichment
+    result["high15_primary_rank"] = high15_rank_values.rank(
+        ascending=False, method="average"
     )
+    high15_rank_n = int(high15_rank_values.notna().sum())
+    if high15_rank_n > 1:
+        result["high15_primary_percentile"] = 100 * (
+            1 - (result["high15_primary_rank"] - 1) / (high15_rank_n - 1)
+        )
+    elif high15_rank_n == 1:
+        result["high15_primary_percentile"] = np.where(
+            high15_rank_values.notna(), 100.0, np.nan
+        )
+    else:
+        result["high15_primary_percentile"] = np.nan
+    high15_comparator = high15_fraction * top_hit_min_enrichment
+    result["high15_comparator_probability"] = high15_comparator
+    result["high15_log2_fold_vs_comparator"] = np.log2(
+        result["high15_probability"].clip(lower=1e-12) / high15_comparator
+    )
+    result["top15_above_comparator"] = result["high15_probability"] > high15_comparator
     result["high_confidence_candidate_flag"] = (
         result["strict_coverage_pass"]
         & result["high_candidate_flag"]
@@ -609,6 +774,8 @@ def analyze(
         "reference_display_label": reference_label,
         "reference_comparison_enabled": reference_variant_id is not None,
     }
+    reference_score = baseline_score
+    reference_high15 = high15_comparator
     result["is_reference_variant"] = False
     if reference_variant_id is not None:
         if reference_variant_id not in result.index:
@@ -641,6 +808,13 @@ def analyze(
             if reference_high15 > 0
             else np.nan
         )
+        result["high15_log2_fold_vs_reference"] = np.log2(
+            result["high15_fold_vs_reference"].clip(lower=1e-12)
+        )
+        result["high15_comparator_probability"] = reference_high15
+        result["high15_log2_fold_vs_comparator"] = result[
+            "high15_log2_fold_vs_reference"
+        ]
         result["score_above_reference"] = (
             result["pass_coverage"] & (result["delta_score_vs_reference"] > 0)
         )
@@ -665,7 +839,7 @@ def analyze(
             else np.nan
         )
         result["top15_above_comparator"] = (
-            result["delta_top15_log2_enrichment_vs_reference"] > 0
+            result["delta_high15_probability_vs_reference"] > 0
         )
         reference_summary.update(
             {
@@ -692,17 +866,89 @@ def analyze(
             }
         )
 
+    bootstrap = technical_high15_bootstrap(
+        raw_bins=raw_bins,
+        fractions=fractions,
+        reference_variant_id=reference_variant_id,
+        read_support=result["top15_read_support_pass"],
+        replicates=bootstrap_replicates,
+        seed=bootstrap_seed,
+        lower_quantile=bootstrap_lower_quantile,
+        top_n=bootstrap_top_n,
+    )
+    result = result.join(bootstrap)
+    result["high15_robust_rank_score"] = result[
+        "high15_log2_fold_bootstrap_lower"
+    ]
+    if bootstrap_replicates > 0:
+        final_rank_values = result["high15_robust_rank_score"].where(
+            result["top15_read_support_pass"]
+        )
+        result["high15_technical_stability_pass"] = (
+            result["high15_bootstrap_probability_above_comparator"]
+            >= bootstrap_min_probability_above_reference
+        )
+    else:
+        final_rank_values = result["high15_probability"].where(
+            result["top15_read_support_pass"]
+        )
+        result["high15_technical_stability_pass"] = result[
+            "top15_above_comparator"
+        ]
+    result["high15_final_rank"] = final_rank_values.rank(
+        ascending=False, method="average"
+    )
+    final_rank_n = int(final_rank_values.notna().sum())
+    if final_rank_n > 1:
+        result["high15_final_percentile"] = 100 * (
+            1 - (result["high15_final_rank"] - 1) / (final_rank_n - 1)
+        )
+    elif final_rank_n == 1:
+        result["high15_final_percentile"] = np.where(
+            final_rank_values.notna(), 100.0, np.nan
+        )
+    else:
+        result["high15_final_percentile"] = np.nan
+
+    # Backward-compatible names now point to the conditional High15 primary
+    # ranking.  The old unsorted-based endpoint remains available explicitly as
+    # top15_vs_unsorted_* and is secondary/exploratory.
+    result["top15_rank"] = result["high15_final_rank"]
+    result["top15_percentile"] = result["high15_final_percentile"]
+    result["high15_weighted_score_support"] = (
+        result["expected_bin_score"] > reference_score
+    )
     result["top15_candidate_flag"] = (
-        result["top15_read_support_pass"]
-        & result["top15_both_bins_enriched"]
-        & result["top15_above_comparator"]
+        result["top15_read_support_pass"] & result["top15_above_comparator"]
     )
     result["top15_priority_candidate_flag"] = (
-        result["top15_candidate_flag"] & ~result["single_bin_jackpot_suspect"]
+        result["top15_candidate_flag"]
+        & result["high15_technical_stability_pass"]
+        & ~result["single_bin_jackpot_suspect"]
+    )
+    result["candidate_tier"] = np.select(
+        [
+            result["top15_priority_candidate_flag"]
+            & result["high15_weighted_score_support"],
+            result["top15_priority_candidate_flag"],
+            result["top15_candidate_flag"],
+        ],
+        ["tier1_clean_high_shift", "tier2_high_tail", "tier3_review"],
+        default="not_candidate",
+    )
+    result["recommended_for_cloning"] = result["candidate_tier"].isin(
+        {"tier1_clean_high_shift", "tier2_high_tail"}
+    )
+    result["default_top_n_cloning_shortlist"] = (
+        result["recommended_for_cloning"]
+        & (result["high15_final_rank"] <= bootstrap_top_n)
+        & ~result["is_reference_variant"]
     )
 
     result = result.reset_index().sort_values(
-        ["pass_coverage", "estimated_rank"], ascending=[False, True], na_position="last"
+        ["top15_read_support_pass", "high15_final_rank", "estimated_rank"],
+        ascending=[False, True, True],
+        na_position="last",
     )
 
     essential_columns = [
@@ -715,6 +961,17 @@ def analyze(
         "high5_probability",
         "high15_probability",
         "high15_enrichment",
+        "high15_comparator_probability",
+        "high15_log2_fold_vs_comparator",
+        "high15_primary_rank",
+        "high15_primary_percentile",
+        "high15_robust_rank_score",
+        "high15_final_rank",
+        "high15_final_percentile",
+        "high15_bootstrap_probability_above_comparator",
+        "high15_bootstrap_top_n_frequency",
+        "high15_technical_stability_pass",
+        "high15_weighted_score_support",
         "bin1_vs_unsorted_enrichment",
         "bin2_vs_unsorted_enrichment",
         "top15_vs_unsorted_enrichment",
@@ -725,6 +982,9 @@ def analyze(
         "top15_percentile",
         "top15_candidate_flag",
         "top15_priority_candidate_flag",
+        "candidate_tier",
+        "recommended_for_cloning",
+        "default_top_n_cloning_shortlist",
         "most_enriched_bin",
         "gate_entry_probability_capped",
         "estimated_rank",
@@ -747,6 +1007,7 @@ def analyze(
                 "delta_score_vs_reference",
                 "delta_high15_probability_vs_reference",
                 "high15_fold_vs_reference",
+                "high15_log2_fold_vs_reference",
                 "score_above_reference",
                 "score_and_high15_above_reference",
                 "delta_top15_log2_enrichment_vs_reference",
@@ -793,10 +1054,36 @@ def analyze(
         "top15_priority_candidate_count": int(
             result["top15_priority_candidate_flag"].sum()
         ),
+        "tier1_clean_high_shift_count": int(
+            result["candidate_tier"].eq("tier1_clean_high_shift").sum()
+        ),
+        "tier2_high_tail_count": int(
+            result["candidate_tier"].eq("tier2_high_tail").sum()
+        ),
+        "tier3_review_count": int(
+            result["candidate_tier"].eq("tier3_review").sum()
+        ),
+        "recommended_for_cloning_count": int(
+            result["recommended_for_cloning"].sum()
+        ),
+        "default_top_n_cloning_shortlist_count": int(
+            result["default_top_n_cloning_shortlist"].sum()
+        ),
+        "primary_endpoint": "conditional_high15_probability",
+        "secondary_endpoint": "expected_bin_score_6_to_1",
+        "unsorted_endpoint_role": "gate_representation_qc_and_exploratory",
         "top_hit_min_unsorted_count": top_hit_min_unsorted_count,
         "top_hit_min_total_bin_count": top_hit_min_total_bin_count,
         "top_hit_min_high_bin_count": top_hit_min_high_bin_count,
         "top_hit_min_enrichment": top_hit_min_enrichment,
+        "bootstrap_replicates": bootstrap_replicates,
+        "bootstrap_seed": bootstrap_seed,
+        "bootstrap_lower_quantile": bootstrap_lower_quantile,
+        "bootstrap_top_n": bootstrap_top_n,
+        "bootstrap_min_probability_above_reference": (
+            bootstrap_min_probability_above_reference
+        ),
+        "bootstrap_uncertainty_scope": "technical_ngs_read_sampling_only",
         "median_unsorted_count": median_unsorted_count,
         "median_total_6bin_count": median_total_bin_count,
         "strict_unsorted_cutoff": strict_unsorted_cutoff,
@@ -1052,13 +1339,14 @@ high-confidence 후보: {summary['high_confidence_candidate_count']:,}</p>
 {reference_html}
 <h2>결과를 읽는 순서</h2><ol>
 <li><code>pass_coverage</code>가 TRUE인 UTR만 봅니다.</li>
-<li><code>expected_bin_score</code>와 <code>expression_tier</code>로 전체적인 high/mid/low 위치를 봅니다.</li>
-<li><code>high15_enrichment</code>가 1보다 크면 bin1+2에 평균보다 많이 있습니다.</li>
+<li><code>high15_final_rank</code>가 cloning 후보의 1차 순위입니다. 낮을수록 우선입니다.</li>
+<li><code>high15_probability</code>는 target gate 안의 해당 UTR 세포 중 bin1+2에 있을 추정 비율입니다.</li>
+<li><code>expected_bin_score</code>는 전체 6-bin 이동을 확인하는 보조 지표입니다.</li>
 <li><code>bin1_probability</code>–<code>bin6_probability</code>로 분포가 자연스러운지 확인합니다.</li>
-<li>최종 후보는 <code>strict_coverage_pass</code>와 <code>high_confidence_candidate_flag</code>를 확인합니다.</li>
+<li><code>candidate_tier</code>, 기술적 bootstrap 안정성, jackpot 경고를 함께 확인합니다.</li>
 </ol>
 <div class="box warn"><b>주의</b>: biological replicate가 없는 한 이것은 후보 선별용 추정 순위입니다.
-정확한 1–2,000등이나 FDR 유의성으로 해석하지 마세요. mCherry fluorescence는 translation rate의 직접 측정값이 아닙니다.</div>
+bootstrap은 NGS read sampling만 반영하며 PCR/생물학적 불확실성을 대체하지 않습니다. FDR 유의성이나 translation rate의 직접 측정값으로 해석하지 마세요.</div>
 <h2>Sample QC</h2>{dataframe_html(sample_qc, 20)}
 <h2>상위 UTR 요약</h2>{dataframe_html(essential, 50)}
 <h2>Plots</h2>{images}
@@ -1112,6 +1400,11 @@ def main() -> int:
         args.top_hit_min_total_bin_count,
         args.top_hit_min_high_bin_count,
         args.top_hit_min_enrichment,
+        args.bootstrap_replicates,
+        args.bootstrap_seed,
+        args.bootstrap_lower_quantile,
+        args.bootstrap_top_n,
+        args.bootstrap_min_probability_above_reference,
     )
     plots = make_plots(args.outdir, sample_qc, result, args.id_column, args.top_n)
     report = write_report(args.outdir, sample_qc, essential, summary, plots, args.id_column)
@@ -1129,37 +1422,72 @@ def main() -> int:
     )
     top15_export_columns = [
         args.id_column,
-        "top15_rank",
-        "top15_percentile",
-        "top15_vs_unsorted_enrichment",
-        "top15_vs_unsorted_log2_enrichment",
-        "bin1_vs_unsorted_enrichment",
-        "bin2_vs_unsorted_enrichment",
+        "high15_final_rank",
+        "high15_final_percentile",
+        "high15_primary_rank",
+        "high15_probability",
+        "high15_enrichment",
+        "high15_comparator_probability",
+        "high15_log2_fold_vs_comparator",
+        "high15_robust_rank_score",
+        "high15_bootstrap_median",
+        "high15_bootstrap_lower",
+        "high15_bootstrap_upper",
+        "high15_log2_fold_bootstrap_median",
+        "high15_log2_fold_bootstrap_lower",
+        "high15_log2_fold_bootstrap_upper",
+        "high15_bootstrap_probability_above_comparator",
+        "high15_bootstrap_top_n_frequency",
+        "high15_technical_stability_pass",
         "unsorted_count",
         "total_6bin_count",
         "high_bin_raw_count",
         "detected_in_n_bins",
         "expected_bin_score",
-        "high15_probability",
+        "high15_weighted_score_support",
+        *[f"bin{x}_count" for x in range(1, 7)],
+        *[f"bin{x}_probability" for x in range(1, 7)],
+        "gate_representation_ratio",
+        "top15_vs_unsorted_enrichment",
+        "top15_vs_unsorted_log2_enrichment",
+        "bin1_vs_unsorted_enrichment",
+        "bin2_vs_unsorted_enrichment",
         "top15_both_bins_enriched",
         "single_bin_jackpot_suspect",
         "top15_candidate_flag",
         "top15_priority_candidate_flag",
+        "candidate_tier",
+        "recommended_for_cloning",
+        "default_top_n_cloning_shortlist",
         "is_reference_variant",
     ]
     if reference_variant_id is not None:
         top15_export_columns.extend(
             [
                 "reference_display_label",
+                "delta_high15_probability_vs_reference",
+                "high15_fold_vs_reference",
+                "high15_log2_fold_vs_reference",
                 "delta_top15_log2_enrichment_vs_reference",
                 "top15_enrichment_fold_vs_reference",
             ]
         )
     top15_ranking = result.loc[
         result["top15_read_support_pass"], top15_export_columns
-    ].sort_values("top15_rank", ascending=True, na_position="last")
+    ].sort_values("high15_final_rank", ascending=True, na_position="last")
+    top15_ranking.to_csv(
+        args.outdir / "high15_primary_ranking.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    # Backward-compatible filename retained for existing offline workflows.
     top15_ranking.to_csv(
         args.outdir / "top15_enrichment_ranking.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    top15_ranking[top15_ranking["top15_candidate_flag"]].to_csv(
+        args.outdir / "high15_candidates.csv",
         index=False,
         encoding="utf-8-sig",
     )
@@ -1173,15 +1501,38 @@ def main() -> int:
         index=False,
         encoding="utf-8-sig",
     )
+    top15_ranking[
+        top15_ranking["recommended_for_cloning"]
+        & ~top15_ranking["is_reference_variant"]
+    ].to_csv(
+        args.outdir / "top_candidates_for_cloning.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    top15_ranking[top15_ranking["default_top_n_cloning_shortlist"]].to_csv(
+        args.outdir / f"top{args.bootstrap_top_n}_candidates_for_cloning.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
     if reference_variant_id is not None:
         comparison_columns = [
             args.id_column,
             "pass_coverage",
             "unsorted_count",
             "total_6bin_count",
+            "top15_read_support_pass",
             "expected_bin_score",
             "delta_score_vs_reference",
             "high15_probability",
+            "high15_final_rank",
+            "high15_robust_rank_score",
+            "high15_bootstrap_probability_above_comparator",
+            "high15_bootstrap_top_n_frequency",
+            "high15_technical_stability_pass",
+            "high15_weighted_score_support",
+            "candidate_tier",
+            "recommended_for_cloning",
+            "default_top_n_cloning_shortlist",
             "top15_vs_unsorted_enrichment",
             "top15_vs_unsorted_log2_enrichment",
             "delta_top15_log2_enrichment_vs_reference",
@@ -1193,6 +1544,7 @@ def main() -> int:
             "top15_priority_candidate_flag",
             "delta_high15_probability_vs_reference",
             "high15_fold_vs_reference",
+            "high15_log2_fold_vs_reference",
             "estimated_rank",
             "expression_percentile",
             "expression_tier",
@@ -1206,8 +1558,8 @@ def main() -> int:
             "reference_display_label",
         ]
         result.loc[:, comparison_columns].sort_values(
-            ["pass_coverage", "delta_score_vs_reference"],
-            ascending=[False, False],
+            ["top15_read_support_pass", "high15_final_rank"],
+            ascending=[False, True],
             na_position="last",
         ).to_csv(args.outdir / "reference_comparison.tsv", sep="\t", index=False)
     sample_qc.to_csv(args.outdir / "sample_qc.tsv", sep="\t", index=False)

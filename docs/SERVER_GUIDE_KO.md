@@ -61,7 +61,11 @@ UTR_bin1_A2,ACTUAL_I7,ACTUAL_I5
 
 ## 4. sorter 수치 입력
 
-`sample_map.csv`의 nominal fraction은 현재 설계 `0.05, 0.10, 0.15, 0.20, 0.30, 0.20`으로 생성됩니다. sorter report에 실제 `collected events`가 있으면 `cells_collected` 열에 입력하세요. 여섯 bin 모두 값이 있을 때 파이프라인이 그 비율을 우선 사용합니다.
+`sample_map.csv`의 population fraction은 현재 동시-sort 설계
+`0.05, 0.10, 0.15, 0.20, 0.30, 0.20`으로 생성되며 phenotype 재구성에 우선
+사용됩니다. Sorter report의 `collected events`가 있으면 `cells_collected` 열에 입력해
+별도 QC 비율로 기록할 수 있지만, recovery/yield 차이가 gate 경계를 바꾸지 않도록
+population fraction을 자동 대체하지 않습니다.
 
 각 bin의 실제 median `log10(mCherry MFI)`가 있으면 `representative_log10_mfi`에 입력할 수 있습니다. 없으면 6→1 ordinal score를 사용합니다.
 

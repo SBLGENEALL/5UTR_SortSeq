@@ -17,10 +17,14 @@ UTR별 bin probability     p_ib = a_ib / sum_b(a_ib)
 | 열 | 의미 | 권장 해석 |
 |---|---|---|
 | `pass_coverage` | unsorted와 6-bin count cutoff 통과 | 먼저 `TRUE`만 봄 |
-| `expected_bin_score` | `6×p_bin1 + ... + 1×p_bin6` | 6에 가까울수록 high mCherry |
-| `high15_probability` | `p_bin1 + p_bin2` | 해당 UTR의 gated cell이 top 15%에 있을 추정 확률 |
+| `high15_final_rank` | technical-bootstrap robust High15 순위 | **cloning primary; 1이 우선** |
+| `high15_probability` | `p_bin1 + p_bin2` | 해당 UTR의 gated cell이 top 15%에 있을 추정 확률; primary point estimate |
+| `expected_bin_score` | `6×p_bin1 + ... + 1×p_bin6` | 전체 분포 high 이동의 supporting metric |
 | `high15_enrichment` | high15 probability / 0.15 | 1=pool 평균, 1보다 크면 high 쪽 |
-| `top15_vs_unsorted_log2_enrichment` | combined bin1+2 frequency / unsorted frequency의 log2 | 고발현 hit의 주 랭킹 |
+| `high15_robust_rank_score` | bootstrap `log2(High15/reference High15)`의 10th percentile | 낮은-read 우연을 보수적으로 낮춘 ranking 값 |
+| `high15_bootstrap_probability_above_comparator` | resample 중 High15가 reference보다 높은 비율 | NGS read-sampling 안정성; biological probability 아님 |
+| `candidate_tier` | tier1/tier2/tier3/not_candidate | cloning 우선순위와 review 경고 |
+| `top15_vs_unsorted_log2_enrichment` | combined bin1+2 frequency / unsorted frequency의 log2 | gate representation 포함 보조/탐색 지표 |
 | `bin1_vs_unsorted_enrichment` | bin1 frequency / unsorted frequency | extreme-high 구간 농축도 |
 | `bin2_vs_unsorted_enrichment` | bin2 frequency / unsorted frequency | 두 번째 high 구간 농축도 |
 | `most_enriched_bin` | `p_ib / w_b`가 최대인 bin | pool 대비 가장 농축된 위치 |
@@ -31,16 +35,18 @@ UTR별 bin probability     p_ib = a_ib / sum_b(a_ib)
 ## 좋은 high 후보
 
 - `pass_coverage=TRUE`
-- `expected_bin_score` 상위 tier
-- `high15_enrichment`가 충분히 큼
+- `high15_final_rank`가 높고 `high15_probability`가 original보다 큼
+- `high15_technical_stability_pass=TRUE`
+- `candidate_tier`가 tier1 또는 tier2
+- tier1이면 `expected_bin_score`도 original보다 큼
 - `most_enriched_bin`이 bin1 또는 bin2
 - bin1→bin6 확률이 한쪽으로 비교적 매끄럽게 이동
 - 이상한 gate depletion이나 한-bin-only PCR jackpot이 없음
 - 1-mismatch와 2-mismatch rescue 설정에서 tier가 안정적
 
-고발현 hit 선정은 `expected_bin_score`보다
-`top15_vs_unsorted_log2_enrichment`를 주 랭킹으로 사용합니다. 전체 분포와
-intermediate-high phenotype은 expected score로 보조 확인합니다. 계산과 후보 기준은
+고발현 hit 선정은 `high15_final_rank`를 주 랭킹으로 사용합니다. 전체 분포와
+intermediate-high phenotype은 expected score로 보조 확인하고, unsorted enrichment는
+gate representation QC/탐색값으로 분리합니다. 계산과 후보 기준은
 [TOP15_ENRICHMENT_KO.md](TOP15_ENRICHMENT_KO.md)에 정리되어 있습니다.
 
 ## Original/reference 대비 우위
@@ -54,6 +60,7 @@ intermediate-high phenotype은 expected score로 보조 확인합니다. 계산�
 | `delta_score_vs_reference` | UTR score − original score; 양수이면 high 쪽으로 이동 |
 | `delta_high15_probability_vs_reference` | UTR의 bin1+2 probability − original 값 |
 | `high15_fold_vs_reference` | UTR high15 probability / original high15 probability |
+| `high15_log2_fold_vs_reference` | 위 비율의 log2; fluorescence fold가 아님 |
 | `score_above_reference` | coverage 통과 및 score가 original보다 높음 |
 | `score_and_high15_above_reference` | score와 high15 probability가 모두 original보다 높음 |
 
@@ -89,10 +96,11 @@ bin1에 존재한다고 추정한다는 뜻입니다. 직접 관찰한 단일세
 확률은 아닙니다. 계산 중간값은 `bash run_pipeline.sh scoring-steps`로 생성되는
 `results/sortseq/scoring_steps/` CSV에서 확인합니다.
 
-## Strict coverage와 low-count 과대평가 방지
+## Read support와 low-count 과대평가 방지
 
 `pass_coverage`의 기본값(`unsorted >= 50`, `total six bins >= 100`)은 탐색 결과를
-최대한 보존하기 위한 최소 기준입니다. 최종 hit에는 다음 strict 기준을 사용합니다.
+최대한 보존하기 위한 최소 기준입니다. 기존 score 중심 strict 표는 다음 강한-support
+QC를 유지하지만, 새 High15 cloning rank의 hard filter는 아닙니다.
 
 | 열 | 기본 기준 |
 |---|---:|
@@ -115,6 +123,10 @@ R 그림은 `results/sortseq/figures/strict/`에 생성됩니다. Probability he
 `log2(probability / population fraction)`을 사용하므로 bin1–6의 서로 다른 크기를
 제거하고 어느 bin에 상대적으로 농축됐는지 보여줍니다.
 
+새 cloning list는 `total_6bin_count >= 200`, `unsorted_count >= 50`,
+`high_bin_raw_count >= 20`을 eligibility로 사용한 뒤 technical bootstrap과 jackpot
+flag로 안정성을 구분합니다. 핵심 파일은 `top_candidates_for_cloning.csv`입니다.
+
 ## UTR A형 양극화 분포
 
 bin1·2와 bin5·6가 동시에 높고 bin3·4가 낮은 UTR는 평균적인 고발현 UTR와 구분합니다.
@@ -134,17 +146,17 @@ bash run_pipeline.sh bimodality-qc
 
 ## 두 scoring endpoint 비교
 
-`expected_bin_score`와 `top15_vs_unsorted_log2_enrichment` 중 하나를 고르기 전에
+`expected_bin_score`와 `high15_probability`를
 `bash run_pipeline.sh compare-metrics`로 total six-bin count가 200보다 큰 동일 UTR
-집합에서 Spearman rho와 Top50 overlap을 확인합니다. 두 지표 모두 높은 consensus를
-우선 후보로 사용하고, score-only는 intermediate/broad shift인지, top15-only는
-high-tail과 동시에 low-tail도 큰지 24번 heatmap에서 확인합니다. 자세한 실행과 판단은
+집합에서 Spearman rho와 Top50 overlap으로 진단합니다. High15가 primary이므로
+consensus를 필수 조건으로 삼지 않으며, score-only와 top15-only의 분포 차이를 24번
+heatmap에서 확인합니다. 자세한 실행과 판단은
 [METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 보세요.
 
 ## 결론 문구
 
 biological replicate가 하나라면 다음 수준이 타당합니다.
 
-> 이 UTR은 mCherry+/GFP- gate 내에서 높은 mCherry bin 쪽으로 이동했으며, cell-fraction-corrected score와 top-15% enrichment에서 상위 tier에 속해 후속 개별 construct 검증 후보로 선정하였다.
+> 이 UTR은 단일 pooled sort에서 mCherry+/GFP- gate 내부의 High15 probability가 original보다 높고 기술적 read-bootstrap에서 안정적으로 유지되어, 개별 clone 검증 후보로 우선 선정하였다. Six-bin weighted score는 전체 분포의 high 이동을 보조적으로 지지하였다.
 
 `translation rate를 증가시켰다`보다 `steady-state mCherry fluorescence가 높은 후보`라고 표현하세요. 정확한 1–2,000등, 통계적 FDR, 번역률의 직접 인과 결론은 independent biological replicate와 개별 construct 검증 전에는 피합니다.

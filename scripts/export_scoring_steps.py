@@ -138,23 +138,15 @@ def load_inputs(matrix_path: Path, sample_map_path: Path):
     bins = bins.sort_values("bin_number")
     if bins["bin_number"].tolist() != [1, 2, 3, 4, 5, 6]:
         raise ValueError("bin_number must contain 1,2,3,4,5,6 exactly once")
-    if "cells_collected" in bins.columns:
-        collected = pd.to_numeric(bins["cells_collected"], errors="coerce")
-    else:
-        collected = pd.Series(np.nan, index=bins.index)
-    if collected.notna().all() and (collected > 0).all():
-        fractions = collected.to_numpy(dtype=float) / collected.sum()
-        fraction_source = "cells_collected"
-    elif collected.notna().any():
-        raise ValueError("cells_collected must be positive for all six bins or blank for all")
-    else:
-        fractions = pd.to_numeric(bins["population_fraction"], errors="raise").to_numpy(float)
-        if fractions.sum() > 1.5:
-            fractions = fractions / 100.0
-        if (fractions <= 0).any() or not np.isclose(fractions.sum(), 1.0, atol=0.02):
-            raise ValueError("six population fractions must be positive and sum to 1 or 100")
-        fractions = fractions / fractions.sum()
-        fraction_source = "population_fraction"
+    fractions = pd.to_numeric(
+        bins["population_fraction"], errors="raise"
+    ).to_numpy(float)
+    if fractions.sum() > 1.5:
+        fractions = fractions / 100.0
+    if (fractions <= 0).any() or not np.isclose(fractions.sum(), 1.0, atol=0.02):
+        raise ValueError("six population fractions must be positive and sum to 1 or 100")
+    fractions = fractions / fractions.sum()
+    fraction_source = "population_fraction"
     bins["effective_population_fraction"] = fractions
     bins["score_weight"] = 7 - bins["bin_number"]
     return matrix, metadata, mapping, bins, counts, fraction_source
@@ -278,6 +270,12 @@ def main() -> int:
         step5["delta_high15_probability_vs_reference"] = (
             high15_probability.to_numpy() - reference_high15
         )
+        step5["high15_fold_vs_reference"] = (
+            high15_probability.to_numpy() / reference_high15
+        )
+        step5["high15_log2_fold_vs_reference"] = np.log2(
+            high15_probability.to_numpy() / reference_high15
+        )
         step5["reference_top15_vs_unsorted_enrichment"] = reference_top15_unsorted
         step5["delta_top15_log2_enrichment_vs_reference"] = np.log2(
             top15_vs_unsorted_enrichment.to_numpy() / reference_top15_unsorted
@@ -309,14 +307,19 @@ def main() -> int:
         (audit["bin1_vs_unsorted_enrichment"] >= 1.0)
         & (audit["bin2_vs_unsorted_enrichment"] >= 1.0)
     )
-    audit["top15_rank"] = audit["top15_vs_unsorted_log2_enrichment"].where(
+    audit["high15_primary_rank"] = audit["high15_probability"].where(
         audit["top15_read_support_pass"]
     ).rank(ascending=False, method="average")
+    audit["top15_rank"] = audit["high15_primary_rank"]
     audit = audit.sort_values("expected_bin_score", ascending=False, na_position="last")
 
     top15_columns = [
         "variant_id",
+        "high15_primary_rank",
         "top15_rank",
+        "high15_probability",
+        "high15_enrichment",
+        "expected_bin_score",
         "top15_vs_unsorted_enrichment",
         "top15_vs_unsorted_log2_enrichment",
         "bin1_vs_unsorted_enrichment",
@@ -332,11 +335,14 @@ def main() -> int:
             [
                 "delta_top15_log2_enrichment_vs_reference",
                 "top15_enrichment_fold_vs_reference",
+                "delta_high15_probability_vs_reference",
+                "high15_fold_vs_reference",
+                "high15_log2_fold_vs_reference",
             ]
         )
     top15_ranking = audit.loc[
         audit["top15_read_support_pass"], top15_columns
-    ].sort_values("top15_rank", ascending=True)
+    ].sort_values("high15_primary_rank", ascending=True)
 
     parameter_rows = []
     mapped_by_id = mapping.set_index("sample_id")
@@ -388,7 +394,13 @@ def main() -> int:
     write_csv(step5, args.outdir / "05_score_contributions_and_final_score.csv")
     write_csv(audit, args.outdir / "06_all_steps_combined_audit.csv")
     write_csv(checks, args.outdir / "07_calculation_checks.csv")
-    write_csv(top15_ranking, args.outdir / "08_top15_unsorted_enrichment_ranking.csv")
+    write_csv(top15_ranking, args.outdir / "08_high15_primary_ranking.csv")
+    write_csv(
+        top15_ranking.sort_values(
+            "top15_vs_unsorted_log2_enrichment", ascending=False
+        ),
+        args.outdir / "09_top15_unsorted_enrichment_secondary.csv",
+    )
 
     manifest = {
         "matrix": str(args.matrix.resolve()),
@@ -399,8 +411,10 @@ def main() -> int:
         "reference_variant_id": reference_id,
         "formula": "p_ib = w_b*(c_ib/N_b) / sum_k[w_k*(c_ik/N_k)]",
         "score": "S_i = sum_b[p_ib*(7-bin_number_b)]",
+        "primary_endpoint": "H_i = p_i1 + p_i2",
+        "primary_rank": "high15_probability descending (bootstrap is added by analyze_sortseq.py)",
         "top15_unsorted_enrichment": (
-            "E_i = [(w1*f_i1+w2*f_i2)/(w1+w2)] / f_i_unsorted"
+            "secondary E_i = [(w1*f_i1+w2*f_i2)/(w1+w2)] / f_i_unsorted"
         ),
         "top15_pseudocount": args.pseudocount,
     }
