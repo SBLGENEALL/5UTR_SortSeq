@@ -14,6 +14,7 @@ Usage:
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh libraryqc
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh analyze
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh scoring-steps
+  SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh profile-qc
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh bimodality-qc
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh compare-metrics
   SORTSEQ_PROJECT_CONFIG=/path/to/sortseq.env bash run_pipeline.sh plot
@@ -25,7 +26,7 @@ Usage:
 EOF
 }
 
-if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|bimodality-qc|compare-metrics|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
+if [[ ! "${MODE}" =~ ^(preflight|rescue|libraryqc|analyze|scoring-steps|profile-qc|bimodality-qc|compare-metrics|plot|status|resources|reanalyze-analysis|reanalyze|full)$ ]]; then
   usage
   exit 2
 fi
@@ -72,6 +73,7 @@ HIGH15_BOOTSTRAP_SEED="${HIGH15_BOOTSTRAP_SEED:-20260819}"
 HIGH15_BOOTSTRAP_LOWER_QUANTILE="${HIGH15_BOOTSTRAP_LOWER_QUANTILE:-0.10}"
 HIGH15_BOOTSTRAP_TOP_N="${HIGH15_BOOTSTRAP_TOP_N:-50}"
 HIGH15_BOOTSTRAP_MIN_PROBABILITY="${HIGH15_BOOTSTRAP_MIN_PROBABILITY:-0.90}"
+ALL_UTR_PROFILE_CLUSTERS="${ALL_UTR_PROFILE_CLUSTERS:-8}"
 STRICT_MIN_UNSORTED_COUNT="${STRICT_MIN_UNSORTED_COUNT:-1000}"
 STRICT_MIN_TOTAL_BIN_COUNT="${STRICT_MIN_TOTAL_BIN_COUNT:-5000}"
 STRICT_RELATIVE_MEDIAN_FRACTION="${STRICT_RELATIVE_MEDIAN_FRACTION:-0.10}"
@@ -506,6 +508,7 @@ run_analyze() {
     --jackpot-max-bin-probability "${JACKPOT_MAX_BIN_PROBABILITY}" \
     --jackpot-max-detected-bins "${JACKPOT_MAX_DETECTED_BINS}" \
     --reference-variant-id "${REFERENCE_VARIANT_ID}"
+  run_profile_qc
   stage_complete
 }
 
@@ -539,6 +542,16 @@ run_scoring_steps() {
     --sample-map "${SAMPLE_MAP}" \
     --outdir "${RESULTS_DIR}/sortseq/scoring_steps" \
     --reference-variant-id "${REFERENCE_VARIANT_ID}"
+}
+
+run_profile_qc() {
+  local result_table="${RESULTS_DIR}/sortseq/utr_results_full.tsv"
+  require_path "${result_table}" "Sort-seq result table"
+  echo "Clustering all read-supported UTR six-bin profiles"
+  "${PYTHON_BIN}" "${REPO_DIR}/scripts/cluster_utr_profiles.py" \
+    --input "${result_table}" \
+    --outdir "${RESULTS_DIR}/sortseq/all_utr_profiles" \
+    --clusters "${ALL_UTR_PROFILE_CLUSTERS}"
 }
 
 run_bimodality_qc() {
@@ -579,6 +592,7 @@ case "${MODE}" in
   libraryqc) run_libraryqc ;;
   analyze) run_analyze ;;
   scoring-steps) run_scoring_steps ;;
+  profile-qc) run_profile_qc ;;
   bimodality-qc) run_bimodality_qc ;;
   compare-metrics) run_compare_metrics ;;
   plot) run_plot ;;

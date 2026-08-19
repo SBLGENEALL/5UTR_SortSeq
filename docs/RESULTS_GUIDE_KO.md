@@ -153,6 +153,27 @@ consensus를 필수 조건으로 삼지 않으며, score-only와 top15-only의 �
 heatmap에서 확인합니다. 자세한 실행과 판단은
 [METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 보세요.
 
+## 전체 UTR 분포와 profile cluster
+
+```bash
+# Python 환경
+bash run_pipeline.sh profile-qc
+# R 환경
+bash run_pipeline.sh plot
+```
+
+`all_utr_profile_assignments.csv`는 read-support 기준을 통과한 각 UTR의 six-bin
+probability와 profile cluster를 기록합니다. 25번 heatmap에서는 한 가로줄이 UTR
+하나이며 색이 각 bin probability입니다. 26번 heatmap은
+`log2(probability / bin fraction)`이므로 bin5처럼 원래 큰 bin이 절대값만으로 밝아
+보이는 효과를 제거합니다.
+
+27번은 cluster 평균, 28번은 cluster 안의 모든 UTR 선과 평균선을 함께 보여줍니다.
+Cluster 번호는 분포를 요약하기 위한 탐색적 라벨이며 cloning 후보 순위가 아닙니다.
+후보 선정은 `high15_final_rank`를 유지하고 cluster는 분포 형태와 outlier를 검토하는
+보조 QC로 사용합니다. 파일별 상세 설명은
+[ALL_UTR_PROFILE_QC_KO.md](ALL_UTR_PROFILE_QC_KO.md)를 보세요.
+
 ## 결론 문구
 
 biological replicate가 하나라면 다음 수준이 타당합니다.
