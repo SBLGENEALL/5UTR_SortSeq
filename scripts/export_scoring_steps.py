@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Export every Sort-seq scoring step from a LibraryQC variant-count matrix.
+"""Export every Sort-seq calculation from a LibraryQC variant-count matrix.
 
-The five exported calculations are:
+The eight canonical exported calculations are:
   1. raw variant counts
   2. sequencing-depth-normalized within-sample frequencies
   3. FACS-bin-size-corrected population mass
-  4. within-UTR-normalized bin probabilities
-  5. per-bin score contributions and final expected bin score
+  4. corrected-mass total for each UTR
+  5. within-UTR-normalized bin probabilities
+  6. conditional High15 probability (primary)
+  7. per-bin score contributions and expected bin score (supporting)
+  8. relative-enrichment profile p_ib / w_b (visualization)
 
 Unsorted is exported for coverage/QC but is not included in the six-bin
 fluorescence score.
@@ -36,7 +39,7 @@ METADATA_COLUMNS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export five auditable Sort-seq scoring steps as CSV files."
+        description="Export eight auditable Sort-seq calculation steps as CSV files."
     )
     parser.add_argument("--matrix", required=True, type=Path)
     parser.add_argument("--sample-map", required=True, type=Path)
@@ -253,6 +256,47 @@ def main() -> int:
         top15_vs_unsorted_enrichment.to_numpy()
     )
 
+    # Canonical Step 6: primary conditional high-tail endpoint.
+    step6 = metadata.copy()
+    step6["step6_high15_probability"] = high15_probability.to_numpy()
+    step6["high15_probability"] = high15_probability.to_numpy()
+    step6["high15_nominal_population_fraction"] = high15_fraction
+    step6["step8_high15_relative_enrichment"] = (
+        high15_probability.to_numpy() / high15_fraction
+    )
+    step6["step8_high15_log2_relative_enrichment"] = np.log2(
+        np.clip(step6["step8_high15_relative_enrichment"].to_numpy(), 1e-12, None)
+    )
+
+    # Canonical Step 7: supporting whole-distribution ordinal score.
+    step7 = metadata.copy()
+    for number, sample_id in enumerate(bin_ids, start=1):
+        step7[f"bin{number}_score_weight"] = float(weights[sample_id])
+        step7[f"bin{number}_score_contribution"] = contributions[
+            sample_id
+        ].to_numpy()
+    step7["step7_expected_bin_score"] = expected_score.to_numpy()
+    step7["expected_bin_score"] = expected_score.to_numpy()
+    step7["neutral_baseline_score"] = neutral_baseline
+    step7["score_shift_from_neutral"] = expected_score.to_numpy() - neutral_baseline
+
+    # Canonical Step 8: p_ib / w_b. A neutral UTR equals one in every bin;
+    # log2 values equal zero. This is for profile shape, not a second probability.
+    relative_enrichment = probability.div(fractions, axis=1)
+    step8 = metadata.copy()
+    for number, sample_id in enumerate(bin_ids, start=1):
+        value = relative_enrichment[sample_id]
+        step8[f"bin{number}_relative_enrichment"] = value.to_numpy()
+        step8[f"bin{number}_log2_relative_enrichment"] = np.log2(
+            np.clip(value.to_numpy(), 1e-12, None)
+        )
+    step8["step8_high15_relative_enrichment"] = (
+        high15_probability.to_numpy() / high15_fraction
+    )
+    step8["step8_high15_log2_relative_enrichment"] = np.log2(
+        np.clip(step8["step8_high15_relative_enrichment"].to_numpy(), 1e-12, None)
+    )
+
     reference_id = resolve_reference_id(metadata, args.reference_variant_id)
     if reference_id is not None:
         score_by_id = pd.Series(expected_score.to_numpy(), index=metadata["variant_id"])
@@ -286,9 +330,13 @@ def main() -> int:
 
     # A single wide audit table makes one-row tracing convenient.
     audit = step1.copy()
-    for table in [step2, step3, step4, step5]:
+    for table in [step2, step3, step4, step5, step6, step7, step8]:
         extra = table.drop(columns=list(metadata.columns), errors="ignore")
-        audit = pd.concat([audit.reset_index(drop=True), extra.reset_index(drop=True)], axis=1)
+        new_columns = [column for column in extra.columns if column not in audit.columns]
+        audit = pd.concat(
+            [audit.reset_index(drop=True), extra[new_columns].reset_index(drop=True)],
+            axis=1,
+        )
     audit["min200_exploratory_pass"] = (
         (audit["unsorted_raw_count"] >= 50)
         & (audit["total_6bin_raw_count"] >= 200)
@@ -299,10 +347,10 @@ def main() -> int:
     ].max(axis=1)
     audit["single_bin_dominance_flag"] = audit["maximum_bin_probability"] >= 0.85
     audit["top15_read_support_pass"] = (
-        (audit["unsorted_raw_count"] >= 50)
-        & (audit["total_6bin_raw_count"] >= 200)
+        (audit["total_6bin_raw_count"] >= 200)
         & (audit["bin1_plus_bin2_raw_count"] >= 20)
     )
+    audit["top15_unsorted_qc_pass"] = audit["unsorted_raw_count"] >= 50
     audit["top15_both_bins_enriched"] = (
         (audit["bin1_vs_unsorted_enrichment"] >= 1.0)
         & (audit["bin2_vs_unsorted_enrichment"] >= 1.0)
@@ -382,6 +430,17 @@ def main() -> int:
                 "check": "maximum_abs_probability_sum_error",
                 "value": float((step4["probability_sum_check"].dropna() - 1).abs().max()),
             },
+            {
+                "check": "maximum_abs_step8_high15_identity_error",
+                "value": float(
+                    np.nanmax(
+                        np.abs(
+                            step8["step8_high15_relative_enrichment"].to_numpy()
+                            - high15_probability.to_numpy() / high15_fraction
+                        )
+                    )
+                ),
+            },
             {"check": "reference_variant_id", "value": reference_id or "not_detected"},
         ]
     )
@@ -402,6 +461,20 @@ def main() -> int:
         args.outdir / "09_top15_unsorted_enrichment_secondary.csv",
     )
 
+    # Canonical, descriptive filenames. Legacy numbered outputs above are kept
+    # so previous notebooks and reports continue to work unchanged.
+    step4_total = metadata.copy()
+    step4_total["sum_6bin_population_mass"] = corrected_mass.sum(axis=1).to_numpy()
+    write_csv(step1, args.outdir / "step01_raw_counts.csv")
+    write_csv(step2, args.outdir / "step02_depth_normalized_frequency.csv")
+    write_csv(step3, args.outdir / "step03_bin_size_corrected_mass.csv")
+    write_csv(step4_total, args.outdir / "step04_corrected_mass_total.csv")
+    write_csv(step4, args.outdir / "step05_within_utr_probability.csv")
+    write_csv(step6, args.outdir / "step06_high15_probability.csv")
+    write_csv(step7, args.outdir / "step07_expected_score.csv")
+    write_csv(step8, args.outdir / "step08_relative_enrichment_profile.csv")
+    write_csv(audit, args.outdir / "step09_all_steps_audit.csv")
+
     manifest = {
         "matrix": str(args.matrix.resolve()),
         "sample_map": str(args.sample_map.resolve()),
@@ -412,6 +485,8 @@ def main() -> int:
         "formula": "p_ib = w_b*(c_ib/N_b) / sum_k[w_k*(c_ik/N_k)]",
         "score": "S_i = sum_b[p_ib*(7-bin_number_b)]",
         "primary_endpoint": "H_i = p_i1 + p_i2",
+        "relative_enrichment_profile": "R_ib = p_ib / w_b; L_ib = log2(R_ib)",
+        "step8_scalar_identity": "H_i/(w1+w2), identical ranking to Step 6",
         "primary_rank": "high15_probability descending (bootstrap is added by analyze_sortseq.py)",
         "top15_unsorted_enrichment": (
             "secondary E_i = [(w1*f_i1+w2*f_i2)/(w1+w2)] / f_i_unsorted"
@@ -421,7 +496,7 @@ def main() -> int:
     (args.outdir / "scoring_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    print(f"Scoring-step CSVs written to: {args.outdir}")
+    print(f"Eight scoring-step CSVs written to: {args.outdir}")
     print(f"Variants: {len(metadata):,}")
     print(f"Neutral baseline score: {neutral_baseline:.6f}")
     print(f"Reference: {reference_id or 'not detected'}")

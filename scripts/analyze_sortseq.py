@@ -528,9 +528,12 @@ def analyze(
     smooth_gate = smooth_bins.mul(fractions, axis=1).sum(axis=1)
 
     total_bin_count = raw_bins.sum(axis=1)
-    pass_coverage = (raw_unsorted >= min_unsorted_count) & (
-        total_bin_count >= min_total_bin_count
-    )
+    phenotype_coverage_pass = total_bin_count >= min_total_bin_count
+    unsorted_qc_pass = raw_unsorted >= min_unsorted_count
+    # Kept for backward compatibility with prior result tables. Conditional
+    # within-gate phenotype metrics use phenotype_coverage_pass; unsorted is an
+    # independent representation/QC sample and is not their denominator.
+    pass_coverage = phenotype_coverage_pass & unsorted_qc_pass
     detected_bin_count = (raw_bins > 0).sum(axis=1)
 
     result = variants.copy().set_index(id_column)
@@ -538,6 +541,8 @@ def analyze(
     result["total_6bin_count"] = total_bin_count
     result["detected_in_n_bins"] = detected_bin_count
     result["pass_coverage"] = pass_coverage
+    result["phenotype_coverage_pass"] = phenotype_coverage_pass
+    result["unsorted_qc_pass"] = unsorted_qc_pass
     result["unsorted_frequency"] = unsorted_frequency
     result["reconstructed_gate_frequency"] = reconstructed_gate_frequency
 
@@ -554,6 +559,12 @@ def analyze(
     for number, sample_id in enumerate(bin_ids, start=1):
         result[f"bin{number}_count"] = raw_bins[sample_id]
         result[f"bin{number}_probability"] = bin_probability[sample_id]
+        result[f"bin{number}_relative_enrichment"] = (
+            bin_probability[sample_id] / float(fractions.iloc[number - 1])
+        )
+        result[f"bin{number}_log2_relative_enrichment"] = np.log2(
+            result[f"bin{number}_relative_enrichment"].clip(lower=1e-12)
+        )
         result[f"bin{number}_vs_unsorted_log2"] = np.log2(
             smooth_bins[sample_id] / smooth_unsorted
         )
@@ -565,6 +576,12 @@ def analyze(
     result["high15_probability"] = bin_probability[bin_ids[:2]].sum(axis=1)
     result["high15_enrichment"] = result["high15_probability"] / high15_fraction
     result["high15_log2_enrichment"] = np.log2(result["high15_enrichment"].clip(lower=1e-12))
+    result["step6_high15_probability"] = result["high15_probability"]
+    result["step7_expected_bin_score"] = result["expected_bin_score"]
+    result["step8_high15_relative_enrichment"] = result["high15_enrichment"]
+    result["step8_high15_log2_relative_enrichment"] = result[
+        "high15_log2_enrichment"
+    ]
 
     # Secondary/exploratory endpoint: combined high-bin composition relative to
     # whole unsorted. This includes both conditional High15 position and target-
@@ -643,6 +660,10 @@ def analyze(
         "high15_probability",
         "high15_enrichment",
         "high15_log2_enrichment",
+        "step6_high15_probability",
+        "step7_expected_bin_score",
+        "step8_high15_relative_enrichment",
+        "step8_high15_log2_relative_enrichment",
         "bin1_vs_unsorted_enrichment",
         "bin2_vs_unsorted_enrichment",
         "bin1_vs_unsorted_log2_enrichment",
@@ -655,8 +676,10 @@ def analyze(
     ]
     if "expected_log10_mfi" in result.columns:
         score_columns.append("expected_log10_mfi")
-    result.loc[~pass_coverage, score_columns] = np.nan
-    result.loc[~pass_coverage, ["most_enriched_bin", "dominant_cell_mass_bin"]] = "low_coverage"
+    result.loc[~phenotype_coverage_pass, score_columns] = np.nan
+    result.loc[
+        ~phenotype_coverage_pass, ["most_enriched_bin", "dominant_cell_mass_bin"]
+    ] = "low_coverage"
 
     result["estimated_rank"] = result["expected_bin_score"].rank(
         ascending=False, method="average"
@@ -674,7 +697,7 @@ def analyze(
         result["expression_percentile"] = np.nan
     result["expression_tier"] = result["expression_percentile"].map(percentile_tier)
     result["high_candidate_flag"] = (
-        result["pass_coverage"]
+        result["phenotype_coverage_pass"]
         & (result["expression_percentile"] >= 95)
         & (result["high15_enrichment"] >= 1.5)
     )
@@ -710,15 +733,17 @@ def analyze(
     )
 
     # Primary endpoint: conditional probability of occupying bin1 or bin2 among
-    # cells already inside the mCherry+/GFP- target gate.  Unsorted is retained
-    # for read support and gate-representation QC, but it does not define this
+    # cells already inside the mCherry+/GFP- target gate. Unsorted is retained
+    # for representation and gate-representation QC, but it does not define this
     # fluorescence ranking.  A real sharp shift can concentrate in bin1 and
     # deplete bin2, so individual enrichment in both bins is diagnostic only.
     result["top15_read_support_pass"] = (
-        (result["unsorted_count"] >= top_hit_min_unsorted_count)
-        & (result["total_6bin_count"] >= top_hit_min_total_bin_count)
+        (result["total_6bin_count"] >= top_hit_min_total_bin_count)
         & (result["high_bin_raw_count"] >= top_hit_min_high_bin_count)
         & result["high15_probability"].notna()
+    )
+    result["top15_unsorted_qc_pass"] = (
+        result["unsorted_count"] >= top_hit_min_unsorted_count
     )
     result["top15_both_bins_enriched"] = (
         (result["bin1_vs_unsorted_enrichment"] >= top_hit_min_enrichment)
@@ -955,9 +980,15 @@ def analyze(
     essential_columns = [
         id_column,
         "pass_coverage",
+        "phenotype_coverage_pass",
+        "unsorted_qc_pass",
         "unsorted_count",
         "total_6bin_count",
         "expected_bin_score",
+        "step6_high15_probability",
+        "step7_expected_bin_score",
+        "step8_high15_relative_enrichment",
+        "step8_high15_log2_relative_enrichment",
         "score_shift_from_pool",
         "high5_probability",
         "high15_probability",
@@ -978,6 +1009,7 @@ def analyze(
         "top15_vs_unsorted_enrichment",
         "top15_vs_unsorted_log2_enrichment",
         "top15_read_support_pass",
+        "top15_unsorted_qc_pass",
         "top15_both_bins_enriched",
         "top15_rank",
         "top15_percentile",
@@ -1040,6 +1072,7 @@ def analyze(
     summary = {
         "reference_variants": int(len(variants)),
         "variants_passing_coverage": int(pass_coverage.sum()),
+        "variants_passing_phenotype_coverage": int(phenotype_coverage_pass.sum()),
         "high_candidate_count": int(result["high_candidate_flag"].sum()),
         "strict_coverage_passing_count": int(result["strict_coverage_pass"].sum()),
         "single_bin_jackpot_suspect_count": int(
@@ -1050,6 +1083,9 @@ def analyze(
         ),
         "top15_read_support_passing_count": int(
             result["top15_read_support_pass"].sum()
+        ),
+        "top15_unsorted_qc_passing_count": int(
+            result["top15_unsorted_qc_pass"].sum()
         ),
         "top15_candidate_count": int(result["top15_candidate_flag"].sum()),
         "top15_priority_candidate_count": int(
@@ -1073,6 +1109,7 @@ def analyze(
         "primary_endpoint": "conditional_high15_probability",
         "secondary_endpoint": "expected_bin_score_6_to_1",
         "unsorted_endpoint_role": "gate_representation_qc_and_exploratory",
+        "top_hit_min_unsorted_count_qc_only": top_hit_min_unsorted_count,
         "top_hit_min_unsorted_count": top_hit_min_unsorted_count,
         "top_hit_min_total_bin_count": top_hit_min_total_bin_count,
         "top_hit_min_high_bin_count": top_hit_min_high_bin_count,

@@ -36,9 +36,15 @@ overlap_table <- read.csv(
 
 numeric_columns <- c(
   "expected_bin_score", "high15_probability",
+  "step6_high15_probability", "step7_expected_bin_score",
+  "step8_high15_relative_enrichment",
+  "step8_high15_log2_relative_enrichment",
+  "step6_rank_filtered", "step7_rank_filtered", "step8_rank_filtered",
   "score_rank_filtered", "top15_rank_filtered",
   "score_rank_minus_top15_rank", "total_6bin_count",
-  "high15_probability", paste0("bin", 1:6, "_probability")
+  paste0("bin", 1:6, "_probability"),
+  paste0("bin", 1:6, "_relative_enrichment"),
+  paste0("bin", 1:6, "_log2_relative_enrichment")
 )
 for (column in numeric_columns) {
   if (column %in% colnames(comparison)) {
@@ -118,6 +124,9 @@ rho <- summary_value(
 )
 configured_top_n <- summary_value("configured_top_n")
 actual_top_n <- summary_value("actual_top_n")
+configured_min_total <- summary_value("configured_min_total_count")
+configured_min_unsorted <- summary_value("configured_min_unsorted_count")
+configured_min_high <- summary_value("configured_min_high_bin_count")
 reference_score <- summary_value("reference_score")
 reference_top15 <- summary_value("reference_high15_probability")
 consensus_n <- summary_value("top_list_consensus_count")
@@ -156,7 +165,12 @@ p_metric <- ggplot2::ggplot(
       rho
     ),
     caption = paste0(
-      "Total six-bin count > 200; unsorted >= 50; bin1+2 raw count >= 20. ",
+      "Total six-bin count >= ", configured_min_total,
+      "; bin1+2 raw count >= ", configured_min_high,
+      ifelse(configured_min_unsorted > 0,
+        paste0("; unsorted >= ", configured_min_unsorted, ". "),
+        "; unsorted is QC only and is not used as a cutoff. "
+      ),
       "High15 is primary; score summarizes the complete six-bin distribution."
     ),
     x = "Expected bin score (whole six-bin position)",
@@ -294,8 +308,10 @@ if (nrow(discordant) > 0) {
     lapply(seq_len(nrow(discordant)), function(row_number) {
       data.frame(
         variant_id = discordant$display_id[[row_number]],
-        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
-        probability = as.numeric(discordant[row_number, probability_columns]),
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 6:1)),
+        probability = as.numeric(unlist(
+          discordant[row_number, probability_columns], use.names = FALSE
+        )),
         stringsAsFactors = FALSE
       )
     })
@@ -327,15 +343,250 @@ if (nrow(discordant) > 0) {
   plots[["24"]] <- p_discordant
 }
 
+# 25: pairwise Step 6/7/8 rank correlations. Step 6 versus Step 8 must be 1
+# because Step 8 High15 enrichment is Step 6 divided by the constant 0.15.
+correlation_heat <- summary_table[
+  summary_table$section == "correlation" &
+    summary_table$scope == "robust_read_support" &
+    summary_table$method == "spearman" &
+    summary_table$comparison %in% c(
+      "step6_high15_vs_step7_expected_score",
+      "step6_high15_vs_step8_high15_relative",
+      "step7_expected_score_vs_step8_high15_relative"
+    ),
+  , drop = FALSE
+]
+if (nrow(correlation_heat) > 0) {
+  correlation_labels <- c(
+    step6_high15_vs_step7_expected_score = "Step 6 vs Step 7",
+    step6_high15_vs_step8_high15_relative = "Step 6 vs Step 8",
+    step7_expected_score_vs_step8_high15_relative = "Step 7 vs Step 8"
+  )
+  correlation_heat$pair <- unname(correlation_labels[correlation_heat$comparison])
+  correlation_heat$rho <- suppressWarnings(as.numeric(correlation_heat$value))
+  correlation_heat$pair <- factor(
+    correlation_heat$pair,
+    levels = c("Step 6 vs Step 7", "Step 6 vs Step 8", "Step 7 vs Step 8")
+  )
+  p_correlation <- ggplot2::ggplot(
+    correlation_heat,
+    ggplot2::aes(x = pair, y = "Spearman", fill = rho)
+  ) +
+    ggplot2::geom_tile(color = "white", linewidth = 1) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("rho = %.3f", rho)),
+      color = "white", fontface = "bold", size = 5
+    ) +
+    ggplot2::scale_fill_gradient2(
+      low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
+      midpoint = 0, limits = c(-1, 1)
+    ) +
+    ggplot2::labs(
+      title = "Rank correlation among Steps 6, 7, and 8",
+      subtitle = paste0(
+        "Step 6 vs 7 is the informative comparison; Step 6 vs 8 is an identity check"
+      ),
+      x = NULL, y = NULL, fill = "Spearman\nrho"
+    ) +
+    theme_comparison() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank()
+    )
+  save_png("25_step6_step7_step8_correlation.png", p_correlation, 10.5, 5.8)
+  plots[["25"]] <- p_correlation
+}
+
+# 26: candidate-list overlap at Top20/50/100 for all pairwise comparisons.
+if ("pair" %in% colnames(overlap_table)) {
+  overlap_plot <- overlap_table[
+    overlap_table$pair %in% c("step6_vs_step7", "step6_vs_step8", "step7_vs_step8"),
+    , drop = FALSE
+  ]
+  if (nrow(overlap_plot) > 0) {
+    overlap_plot$requested_top_n <- suppressWarnings(
+      as.numeric(overlap_plot$requested_top_n)
+    )
+    overlap_plot$overlap_percent_of_each_list <- suppressWarnings(
+      as.numeric(overlap_plot$overlap_percent_of_each_list)
+    )
+    overlap_plot$pair <- factor(
+      overlap_plot$pair,
+      levels = c("step6_vs_step7", "step6_vs_step8", "step7_vs_step8"),
+      labels = c("Step 6 vs 7", "Step 6 vs 8", "Step 7 vs 8")
+    )
+    p_pair_overlap <- ggplot2::ggplot(
+      overlap_plot,
+      ggplot2::aes(
+        x = factor(requested_top_n),
+        y = overlap_percent_of_each_list,
+        fill = pair
+      )
+    ) +
+      ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.78), width = 0.72) +
+      ggplot2::geom_text(
+        ggplot2::aes(label = sprintf("%.0f%%", overlap_percent_of_each_list)),
+        position = ggplot2::position_dodge(width = 0.78),
+        vjust = -0.25, size = 3.6
+      ) +
+      ggplot2::scale_fill_manual(
+        values = c(
+          "Step 6 vs 7" = "#D55E00",
+          "Step 6 vs 8" = "#009E73",
+          "Step 7 vs 8" = "#0072B2"
+        )
+      ) +
+      ggplot2::scale_y_continuous(
+        limits = c(0, 108), breaks = seq(0, 100, 20),
+        labels = function(x) paste0(x, "%")
+      ) +
+      ggplot2::labs(
+        title = "Top candidate overlap across Steps 6, 7, and 8",
+        subtitle = "Top20, Top50, and Top100 are calculated on the same filtered UTR set",
+        x = "Candidate-list size", y = "Overlap within each list", fill = NULL
+      ) +
+      theme_comparison()
+    save_png("26_step6_step7_step8_topn_overlap.png", p_pair_overlap, 11.2, 6.5)
+    plots[["26"]] <- p_pair_overlap
+  }
+}
+
+# 27: Step-8 profile heatmap. Bins are deliberately ordered low-to-high so a
+# high-expression tail appears on the right. Neutral relative enrichment is 0.
+relative_columns <- paste0("bin", 1:6, "_log2_relative_enrichment")
+if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
+  display_n <- min(50, nrow(comparison))
+  profile_candidates <- comparison[
+    order(comparison$step6_rank_filtered, comparison$step7_rank_filtered),
+    , drop = FALSE
+  ]
+  profile_candidates <- head(profile_candidates, display_n)
+  profile_candidates$display_id <- paste0(
+    profile_candidates$variant_id,
+    " [H rank ", profile_candidates$step6_rank_filtered, "]"
+  )
+  profile_heat <- do.call(
+    rbind,
+    lapply(seq_len(nrow(profile_candidates)), function(row_number) {
+      data.frame(
+        variant_id = profile_candidates$display_id[[row_number]],
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 6:1)),
+        log2_relative_enrichment = as.numeric(unlist(
+          profile_candidates[row_number, relative_columns], use.names = FALSE
+        )),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  profile_heat$variant_id <- factor(
+    profile_heat$variant_id, levels = rev(profile_candidates$display_id)
+  )
+  heat_limit <- max(abs(profile_heat$log2_relative_enrichment), na.rm = TRUE)
+  heat_limit <- max(1, min(heat_limit, 4))
+  p_relative_heat <- ggplot2::ggplot(
+    profile_heat,
+    ggplot2::aes(x = bin, y = variant_id, fill = log2_relative_enrichment)
+  ) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.12) +
+    ggplot2::scale_fill_gradient2(
+      low = "#2166AC", mid = "white", high = "#B2182B",
+      midpoint = 0, limits = c(-heat_limit, heat_limit), oob = scales::squish
+    ) +
+    ggplot2::labs(
+      title = "Step-8 relative-enrichment profiles of Top High15 candidates",
+      subtitle = "Low fluorescence is left; high fluorescence is right; white means neutral (p/w = 1)",
+      x = "FACS bin (low to high expression)", y = "UTR",
+      fill = "log2(p / w)"
+    ) +
+    theme_comparison() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_text(size = 6.8)
+    )
+  save_png(
+    "27_top_high15_relative_enrichment_heatmap.png", p_relative_heat,
+    10.8, max(7.4, display_n * 0.20)
+  )
+  plots[["27"]] <- p_relative_heat
+}
+
+# 28: median Step-8 profiles. This summarizes whether the Step-6 and Step-7
+# top lists both shift toward the high-expression bins without averaging raw
+# sequencing depth into the phenotype profile.
+if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
+  top_k <- min(as.integer(actual_top_n), nrow(comparison))
+  group_rows <- list(
+    "All eligible UTRs" = comparison,
+    "Step 6 Top list" = comparison[
+      comparison$step6_rank_filtered <= top_k, , drop = FALSE
+    ],
+    "Step 7 Top list" = comparison[
+      comparison$step7_rank_filtered <= top_k, , drop = FALSE
+    ]
+  )
+  if (nrow(reference) == 1) {
+    group_rows[["original"]] <- reference
+  }
+  median_profiles <- do.call(
+    rbind,
+    lapply(names(group_rows), function(group_name) {
+      table <- group_rows[[group_name]]
+      data.frame(
+        group = group_name,
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 6:1)),
+        median_log2_relative_enrichment = vapply(
+          relative_columns,
+          function(column) stats::median(table[[column]], na.rm = TRUE),
+          numeric(1)
+        ),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  median_profiles$group <- factor(
+    median_profiles$group,
+    levels = c("All eligible UTRs", "Step 7 Top list", "Step 6 Top list", "original")
+  )
+  p_median_profile <- ggplot2::ggplot(
+    median_profiles,
+    ggplot2::aes(
+      x = bin, y = median_log2_relative_enrichment,
+      color = group, group = group
+    )
+  ) +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = colors[["muted"]]) +
+    ggplot2::geom_line(linewidth = 1.15) +
+    ggplot2::geom_point(size = 2.8) +
+    ggplot2::scale_color_manual(
+      values = c(
+        "All eligible UTRs" = "#7F8C8D",
+        "Step 7 Top list" = "#0072B2",
+        "Step 6 Top list" = "#D55E00",
+        original = "#B2182B"
+      ), drop = FALSE
+    ) +
+    ggplot2::labs(
+      title = "Median relative-enrichment profiles of candidate groups",
+      subtitle = "A high-expression profile rises toward bin1 on the right",
+      x = "FACS bin (low to high expression)",
+      y = "Median log2(relative enrichment p/w)", color = NULL
+    ) +
+    theme_comparison()
+  save_png("28_group_median_relative_enrichment_profiles.png", p_median_profile)
+  plots[["28"]] <- p_median_profile
+}
+
 plot_statistics <- data.frame(
   metric = c(
     "read_supported_utr", "spearman_score_vs_high15_probability", "configured_top_n",
     "actual_top_n", "top_n_consensus", "top_n_score_only",
-    "top_n_top15_only"
+    "top_n_top15_only", "step6_step8_rank_mismatch_count"
   ),
   value = c(
     nrow(comparison), rho, configured_top_n, actual_top_n,
-    consensus_n, score_only_n, top15_only_n
+    consensus_n, score_only_n, top15_only_n,
+    summary_value("step6_step8_rank_mismatch_count")
   ),
   stringsAsFactors = FALSE
 )

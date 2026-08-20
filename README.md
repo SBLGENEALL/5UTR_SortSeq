@@ -96,10 +96,8 @@ bash run_pipeline.sh preflight
 bash run_pipeline.sh rescue
 bash run_pipeline.sh libraryqc
 bash run_pipeline.sh analyze
-bash run_pipeline.sh scoring-steps
-bash run_pipeline.sh profile-qc
+# analyze가 Step 1-8 export, Step 6-8 비교, profile QC까지 자동 실행
 bash run_pipeline.sh bimodality-qc
-bash run_pipeline.sh compare-metrics
 bash run_pipeline.sh plot
 ```
 
@@ -134,6 +132,8 @@ results/sortseq/bimodality_qc/bimodality_summary.csv
 results/sortseq/bimodality_qc/clear_bimodal_candidates.csv
 results/sortseq/bimodality_qc/utra_like_strong_polarization.csv
 results/sortseq/metric_comparison/metric_comparison_summary.csv
+results/sortseq/metric_comparison/step6_step7_step8_correlations.csv
+results/sortseq/metric_comparison/step6_step7_step8_topn_overlap.csv
 results/sortseq/metric_comparison/top_candidates_consensus.csv
 results/sortseq/figures/sortseq_qc_figures.pdf
 results/sortseq/figures/strict/strict_candidate_figures.pdf
@@ -163,7 +163,9 @@ v0.2.0부터 cloning 후보의 1차 지표는 target gate 내부의
 `expected_bin_score`는 전체 6-bin 이동을 확인하는 보조 지표이고,
 `top15_vs_unsorted_log2_enrichment`는 gate representation이 포함된 탐색/QC 지표입니다.
 
-기본 eligibility는 `unsorted >= 50`, `total six bins >= 200`, `bin1+bin2 >= 20`입니다.
+기본 phenotype eligibility는 `total six bins >= 200`, `bin1+bin2 >= 20`입니다.
+Unsorted는 conditional High15의 분모나 hard filter가 아니라 representation 및 gate-entry
+QC로 별도 보고합니다.
 각 bin의 variant count vector를 1,000회 기술적 read-bootstrap하여
 `log2(High15/original High15)`의 10th percentile로 robust rank를 만듭니다. 이 bootstrap은
 PCR 또는 biological uncertainty를 추정하지 않습니다. bin1과 bin2의 개별 unsorted
@@ -185,13 +187,13 @@ Python 환경에서 QC를 실행한 뒤 R 환경에서 기존 `plot` 명령을 �
 `results/sortseq/figures/bimodality/`에 17–20번 그림과 PDF가 생성됩니다. 자세한 기준과
 해석은 [UTR A형 양극화 분포 QC](docs/BIMODALITY_QC_KO.md)를 보세요.
 
-## Expected score와 High15 probability 직접 비교
+## Step 6·7·8 직접 비교
 
-`bash run_pipeline.sh compare-metrics`는 6개 bin total raw count가 200 이하인 UTR를
-제외하고, 동일한 read-supported UTR 집합에서 expected score와 conditional
-High15 probability의 Spearman 상관성, Top 20/50/100 overlap, original 대비 일치/불일치 후보를
-계산합니다. R `plot`을 다시 실행하면 `figures/metric_comparison/`에 21–24번 그림이
-생성됩니다. 자세한 해석은
+`bash run_pipeline.sh compare-metrics`는 동일한 read-supported UTR 집합에서 Step 6
+conditional High15, Step 7 expected score, Step 8 `p/w` relative enrichment를 계산합니다.
+Step 6–7의 Spearman 상관성과 Top 20/50/100 overlap을 보고하고, Step 6–8은 rho=1,
+overlap=100%인지 자동 검산합니다. R `plot`을 실행하면
+`figures/metric_comparison/`에 21–28번 그림이 생성됩니다. 자세한 해석은
 [두 scoring 방식 직접 비교](docs/METRIC_COMPARISON_KO.md)를 보세요.
 
 ## 전체 UTR의 6-bin 분포 보기
@@ -214,7 +216,7 @@ bin 크기 대비 상대 농축 heatmap, cluster 평균 구성과 cluster 내부
 `all_utr_profile_assignments.csv`에서 확인합니다. 자세한 설명은
 [전체 UTR 6-bin 분포 시각화](docs/ALL_UTR_PROFILE_QC_KO.md)를 보세요.
 
-## Scoring 계산을 5단계 CSV로 확인
+## 계산 전체를 Step 1–8 CSV로 확인
 
 `variant_count_matrix.csv`에서 바로 시작해 각 중간 계산을 확인하려면 Python 환경에서
 다음을 실행합니다.
@@ -223,7 +225,8 @@ bin 크기 대비 상대 농축 heatmap, cluster 평균 구성과 cluster 내부
 bash run_pipeline.sh scoring-steps
 ```
 
-이 명령은 기존 분석 결과를 삭제하거나 재계산하지 않고 다음 CSV를 추가합니다.
+이 명령은 기존 분석 결과를 삭제하지 않고 raw count부터 profile enrichment까지 모든
+중간 계산 CSV를 추가합니다. `analyze`를 새로 실행한 경우에는 자동으로 생성됩니다.
 
 ```text
 results/sortseq/scoring_steps/00_sample_parameters.csv
@@ -236,12 +239,23 @@ results/sortseq/scoring_steps/06_all_steps_combined_audit.csv
 results/sortseq/scoring_steps/07_calculation_checks.csv
 results/sortseq/scoring_steps/08_high15_primary_ranking.csv
 results/sortseq/scoring_steps/09_top15_unsorted_enrichment_secondary.csv
+results/sortseq/scoring_steps/step01_raw_counts.csv
+results/sortseq/scoring_steps/step02_depth_normalized_frequency.csv
+results/sortseq/scoring_steps/step03_bin_size_corrected_mass.csv
+results/sortseq/scoring_steps/step04_corrected_mass_total.csv
+results/sortseq/scoring_steps/step05_within_utr_probability.csv
+results/sortseq/scoring_steps/step06_high15_probability.csv
+results/sortseq/scoring_steps/step07_expected_score.csv
+results/sortseq/scoring_steps/step08_relative_enrichment_profile.csv
+results/sortseq/scoring_steps/step09_all_steps_audit.csv
 ```
 
 여기서 `binN_probability`는 sequencing read가 그 bin에 들어갈 확률이 아니라,
 depth와 bin size를 보정한 뒤 추정한
 `P(bin N | 해당 UTR, mCherry+/GFP- gate)`입니다. 한 UTR의 bin1–6 probability 합은
 1이며, 이 probability에 `6,5,4,3,2,1`을 곱한 합이 expected bin score입니다.
+Step 8의 `binN_relative_enrichment=p_ib/w_b`는 probability가 아니라 bin 기본 크기 대비
+농축도이며, `log2(p_ib/w_b)`가 0이면 중립입니다.
 
 ## 기존 strict score QC와 보조 그림
 

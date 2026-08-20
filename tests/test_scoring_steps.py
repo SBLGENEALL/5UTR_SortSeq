@@ -103,6 +103,26 @@ class ScoringStepExportTests(unittest.TestCase):
             self.assertTrue(
                 (output / "09_top15_unsorted_enrichment_secondary.csv").exists()
             )
+            for number in range(1, 9):
+                self.assertTrue(
+                    list(output.glob(f"step{number:02d}_*.csv")),
+                    msg=f"canonical step {number} output is missing",
+                )
+            step8 = pd.read_csv(
+                output / "step08_relative_enrichment_profile.csv"
+            ).set_index("variant_id")
+            relative_columns = [
+                f"bin{x}_relative_enrichment" for x in range(1, 7)
+            ]
+            np.testing.assert_allclose(
+                step8.loc["orginal", relative_columns].to_numpy(dtype=float),
+                np.ones(6),
+            )
+            self.assertAlmostEqual(
+                step8.loc["orginal", "step8_high15_relative_enrichment"],
+                step5.loc["orginal", "high15_probability"] / 0.15,
+                places=12,
+            )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 import sys
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -95,6 +98,23 @@ class CompareMetricsTest(unittest.TestCase):
         self.assertEqual(summary_json["top_list_top15_only_count"], 1)
         self.assertIn("metric", summary.columns)
         self.assertIn("requested_top_n", overlap.columns)
+        self.assertTrue(summary_json["step8_identity_check_pass"])
+        self.assertEqual(summary_json["step6_step8_rank_mismatch_count"], 0)
+        self.assertAlmostEqual(
+            summary_json["step6_vs_step8_spearman_rho"], 1.0, places=12
+        )
+        np.testing.assert_allclose(
+            supported["step8_high15_relative_enrichment"],
+            supported["step6_high15_probability"] / 0.15,
+        )
+        step6_step8_top2 = overlap[
+            (overlap["pair"] == "step6_vs_step8")
+            & (overlap["requested_top_n"] == 2)
+        ].iloc[0]
+        self.assertEqual(step6_step8_top2["overlap_count"], 2)
+        self.assertEqual(
+            step6_step8_top2["overlap_percent_of_each_list"], 100.0
+        )
 
     def test_missing_metric_fails(self):
         with self.assertRaisesRegex(
@@ -103,6 +123,41 @@ class CompareMetricsTest(unittest.TestCase):
             analyze_metric_comparison(
                 self.input.drop(columns=["high15_probability"])
             )
+
+    def test_cli_writes_explicit_step678_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            input_path = root / "results.tsv"
+            output_dir = root / "comparison"
+            self.input.to_csv(input_path, sep="\t", index=False)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "compare_metrics.py"),
+                    "--input",
+                    str(input_path),
+                    "--outdir",
+                    str(output_dir),
+                    "--min-total-count",
+                    "201",
+                    "--min-unsorted-count",
+                    "50",
+                    "--min-high-bin-count",
+                    "20",
+                    "--top-n",
+                    "2",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            for filename in [
+                "step6_step7_step8_metrics.csv",
+                "step6_step7_step8_correlations.csv",
+                "step6_step7_step8_topn_overlap.csv",
+                "step6_step7_step8_summary.json",
+            ]:
+                self.assertTrue((output_dir / filename).exists(), filename)
 
 
 if __name__ == "__main__":

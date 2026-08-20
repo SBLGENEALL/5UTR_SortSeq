@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Compare the High15 primary endpoint with the six-bin supporting score."""
+"""Compare Sort-seq Steps 6, 7, and 8 on one read-supported UTR set.
+
+Step 6 is the primary conditional High15 probability, Step 7 is the
+supporting six-bin ordinal score, and Step 8 is the relative-enrichment
+representation p_ib / w_b. The scalar Step-8 High15 enrichment is exactly
+Step6 / (w1 + w2), so its rank must be identical to Step 6. This script
+checks that identity and treats any disagreement as a calculation error.
+"""
 
 from __future__ import annotations
 
@@ -13,20 +20,68 @@ import pandas as pd
 from scipy.stats import kendalltau, pearsonr, spearmanr
 
 
+DEFAULT_POPULATION_FRACTIONS = np.asarray(
+    [0.05, 0.10, 0.15, 0.20, 0.30, 0.20], dtype=float
+)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare expected-bin score and conditional High15 probability after a shared "
-            "six-bin total-read filter."
+            "Compare Step 6 High15 probability, Step 7 expected-bin score, "
+            "and Step 8 relative enrichment on the same UTR universe."
         )
     )
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
-    parser.add_argument("--min-total-count", type=int, default=201)
-    parser.add_argument("--min-unsorted-count", type=int, default=50)
+    parser.add_argument(
+        "--sample-map",
+        type=Path,
+        help="Optional sample map used to read the six nominal population fractions.",
+    )
+    parser.add_argument("--min-total-count", type=int, default=200)
+    parser.add_argument(
+        "--min-unsorted-count",
+        type=int,
+        default=0,
+        help=(
+            "Optional unsorted QC cutoff. It is not part of the Step 6/7/8 formulas; "
+            "the default of zero leaves the conditional phenotype universe unchanged."
+        ),
+    )
     parser.add_argument("--min-high-bin-count", type=int, default=20)
     parser.add_argument("--top-n", type=int, default=50)
     return parser.parse_args()
+
+
+def read_table(path: Path) -> pd.DataFrame:
+    separator = "\t" if path.suffix.lower() in {".tsv", ".txt"} else ","
+    return pd.read_csv(path, sep=separator)
+
+
+def read_population_fractions(sample_map: Path | None) -> np.ndarray:
+    if sample_map is None:
+        return DEFAULT_POPULATION_FRACTIONS.copy()
+    mapping = read_table(sample_map)
+    required = {"sample_type", "bin_number", "population_fraction"}
+    missing = sorted(required.difference(mapping.columns))
+    if missing:
+        raise ValueError(f"sample map is missing columns: {missing}")
+    bins = mapping[
+        mapping["sample_type"].astype(str).str.lower().eq("bin")
+    ].copy()
+    bins["bin_number"] = pd.to_numeric(bins["bin_number"], errors="raise").astype(int)
+    bins = bins.sort_values("bin_number")
+    if bins["bin_number"].tolist() != [1, 2, 3, 4, 5, 6]:
+        raise ValueError("sample map must contain bin_number 1 through 6 exactly once")
+    fractions = pd.to_numeric(
+        bins["population_fraction"], errors="raise"
+    ).to_numpy(dtype=float)
+    if fractions.sum() > 1.5:
+        fractions = fractions / 100.0
+    if (fractions <= 0).any() or not np.isclose(fractions.sum(), 1.0, atol=0.02):
+        raise ValueError("population fractions must be positive and sum to 1 or 100")
+    return fractions / fractions.sum()
 
 
 def as_bool(values: pd.Series) -> pd.Series:
@@ -53,21 +108,29 @@ def safe_correlation(
     return float(result.statistic), float(result.pvalue), n
 
 
-def rank_overlap(table: pd.DataFrame, top_n: int) -> dict[str, object]:
+def rank_overlap(
+    table: pd.DataFrame,
+    top_n: int,
+    left_rank: str = "score_rank_filtered",
+    right_rank: str = "top15_rank_filtered",
+    pair: str = "step6_vs_step7",
+) -> dict[str, object]:
     actual_n = min(top_n, len(table))
     if actual_n == 0:
         return {
+            "pair": pair,
             "requested_top_n": top_n,
             "actual_top_n": 0,
             "overlap_count": 0,
             "overlap_percent_of_each_list": float("nan"),
             "jaccard": float("nan"),
         }
-    score_ids = set(table.nsmallest(actual_n, "score_rank_filtered")["variant_id"])
-    top15_ids = set(table.nsmallest(actual_n, "top15_rank_filtered")["variant_id"])
-    overlap = score_ids & top15_ids
-    union = score_ids | top15_ids
+    left_ids = set(table.nsmallest(actual_n, left_rank)["variant_id"])
+    right_ids = set(table.nsmallest(actual_n, right_rank)["variant_id"])
+    overlap = left_ids & right_ids
+    union = left_ids | right_ids
     return {
+        "pair": pair,
         "requested_top_n": top_n,
         "actual_top_n": actual_n,
         "overlap_count": len(overlap),
@@ -78,10 +141,11 @@ def rank_overlap(table: pd.DataFrame, top_n: int) -> dict[str, object]:
 
 def analyze_metric_comparison(
     result: pd.DataFrame,
-    min_total_count: int = 201,
-    min_unsorted_count: int = 50,
+    min_total_count: int = 200,
+    min_unsorted_count: int = 0,
     min_high_bin_count: int = 20,
     top_n: int = 50,
+    population_fractions: np.ndarray | list[float] | None = None,
 ) -> tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -89,6 +153,17 @@ def analyze_metric_comparison(
     pd.DataFrame,
     dict[str, object],
 ]:
+    fractions = np.asarray(
+        DEFAULT_POPULATION_FRACTIONS
+        if population_fractions is None
+        else population_fractions,
+        dtype=float,
+    )
+    if fractions.shape != (6,) or (fractions <= 0).any():
+        raise ValueError("population_fractions must contain six positive values")
+    fractions = fractions / fractions.sum()
+    high15_fraction = float(fractions[:2].sum())
+
     probability_columns = [f"bin{x}_probability" for x in range(1, 7)]
     required = {
         "variant_id",
@@ -121,50 +196,88 @@ def analyze_metric_comparison(
     for column in numeric_columns:
         output[column] = pd.to_numeric(output[column], errors="coerce")
 
+    # Canonical Step 6/7/8 columns. Step 8 is both a six-bin profile and a
+    # scalar high-tail summary. The scalar is a fixed transform of Step 6.
+    output["step6_high15_probability"] = output["high15_probability"]
+    output["step7_expected_bin_score"] = output["expected_bin_score"]
+    for index, fraction in enumerate(fractions, start=1):
+        relative = output[f"bin{index}_probability"] / float(fraction)
+        output[f"bin{index}_relative_enrichment"] = relative
+        output[f"bin{index}_log2_relative_enrichment"] = np.log2(
+            relative.clip(lower=1e-12)
+        )
+    output["step8_high15_relative_enrichment"] = (
+        output["step6_high15_probability"] / high15_fraction
+    )
+    output["step8_high15_log2_relative_enrichment"] = np.log2(
+        output["step8_high15_relative_enrichment"].clip(lower=1e-12)
+    )
+
     finite_metrics = (
-        np.isfinite(output["expected_bin_score"])
-        & np.isfinite(output["high15_probability"])
+        np.isfinite(output["step6_high15_probability"])
+        & np.isfinite(output["step7_expected_bin_score"])
+        & np.isfinite(output["step8_high15_relative_enrichment"])
     )
     output["total_count_filter_pass"] = (
         output["total_6bin_count"] >= min_total_count
     )
+    output["unsorted_qc_filter_pass"] = (
+        output["unsorted_count"] >= min_unsorted_count
+    )
+    output["high_bin_support_filter_pass"] = (
+        output["high_bin_raw_count"] >= min_high_bin_count
+    )
     output["comparison_read_support_pass"] = (
         output["total_count_filter_pass"]
-        & (output["unsorted_count"] >= min_unsorted_count)
-        & (output["high_bin_raw_count"] >= min_high_bin_count)
+        & output["unsorted_qc_filter_pass"]
+        & output["high_bin_support_filter_pass"]
         & finite_metrics
     )
 
-    supported_mask = output["comparison_read_support_pass"]
-    supported = output.loc[supported_mask].copy()
-    supported["score_rank_filtered"] = supported["expected_bin_score"].rank(
-        method="min", ascending=False
-    )
-    supported["top15_rank_filtered"] = supported["high15_probability"].rank(
-        method="min", ascending=False
-    )
-    supported["score_rank_percentile"] = supported["expected_bin_score"].rank(
-        method="average", pct=True
-    )
-    supported["top15_rank_percentile"] = supported["high15_probability"].rank(
-        method="average", pct=True
-    )
+    supported = output.loc[output["comparison_read_support_pass"]].copy()
+    supported["step6_rank_filtered"] = supported[
+        "step6_high15_probability"
+    ].rank(method="min", ascending=False)
+    supported["step7_rank_filtered"] = supported[
+        "step7_expected_bin_score"
+    ].rank(method="min", ascending=False)
+    supported["step8_rank_filtered"] = supported[
+        "step8_high15_relative_enrichment"
+    ].rank(method="min", ascending=False)
+
+    # Backward-compatible names used by existing reports and R figures.
+    supported["top15_rank_filtered"] = supported["step6_rank_filtered"]
+    supported["score_rank_filtered"] = supported["step7_rank_filtered"]
+    supported["score_rank_percentile"] = supported[
+        "step7_expected_bin_score"
+    ].rank(method="average", pct=True)
+    supported["top15_rank_percentile"] = supported[
+        "step6_high15_probability"
+    ].rank(method="average", pct=True)
     supported["score_rank_minus_top15_rank"] = (
-        supported["score_rank_filtered"] - supported["top15_rank_filtered"]
+        supported["step7_rank_filtered"] - supported["step6_rank_filtered"]
+    )
+    supported["step6_rank_minus_step8_rank"] = (
+        supported["step6_rank_filtered"] - supported["step8_rank_filtered"]
     )
 
     actual_top_n = min(top_n, len(supported))
     supported["top_score_list_flag"] = False
     supported["top15_list_flag"] = False
+    supported["top_step8_list_flag"] = False
     if actual_top_n:
-        score_top_index = supported.nsmallest(
-            actual_top_n, "score_rank_filtered"
-        ).index
-        top15_top_index = supported.nsmallest(
-            actual_top_n, "top15_rank_filtered"
-        ).index
-        supported.loc[score_top_index, "top_score_list_flag"] = True
-        supported.loc[top15_top_index, "top15_list_flag"] = True
+        supported.loc[
+            supported.nsmallest(actual_top_n, "step7_rank_filtered").index,
+            "top_score_list_flag",
+        ] = True
+        supported.loc[
+            supported.nsmallest(actual_top_n, "step6_rank_filtered").index,
+            "top15_list_flag",
+        ] = True
+        supported.loc[
+            supported.nsmallest(actual_top_n, "step8_rank_filtered").index,
+            "top_step8_list_flag",
+        ] = True
     supported["top_list_membership"] = np.select(
         [
             supported["top_score_list_flag"] & supported["top15_list_flag"],
@@ -186,13 +299,13 @@ def analyze_metric_comparison(
     if len(reference) > 1:
         raise ValueError("more than one reference variant was identified")
     if len(reference) == 1:
-        reference_score = float(reference["expected_bin_score"].iloc[0])
-        reference_top15 = float(reference["high15_probability"].iloc[0])
+        reference_score = float(reference["step7_expected_bin_score"].iloc[0])
+        reference_top15 = float(reference["step6_high15_probability"].iloc[0])
         supported["score_above_reference_filtered"] = (
-            supported["expected_bin_score"] > reference_score
+            supported["step7_expected_bin_score"] > reference_score
         )
         supported["top15_above_reference_filtered"] = (
-            supported["high15_probability"] > reference_top15
+            supported["step6_high15_probability"] > reference_top15
         )
         supported["reference_quadrant"] = np.select(
             [
@@ -211,31 +324,38 @@ def analyze_metric_comparison(
         supported["top15_above_reference_filtered"] = False
         supported["reference_quadrant"] = "reference_unavailable"
 
-    boolean_output_columns = {
-        "top_score_list_flag",
-        "top15_list_flag",
-        "is_reference_variant",
-        "score_above_reference_filtered",
-        "top15_above_reference_filtered",
-    }
-    string_output_columns = {"top_list_membership", "reference_quadrant"}
-    for column in [
-        "score_rank_filtered",
+    transfer_columns = [
+        "step6_rank_filtered",
+        "step7_rank_filtered",
+        "step8_rank_filtered",
         "top15_rank_filtered",
+        "score_rank_filtered",
         "score_rank_percentile",
         "top15_rank_percentile",
         "score_rank_minus_top15_rank",
+        "step6_rank_minus_step8_rank",
         "top_score_list_flag",
         "top15_list_flag",
+        "top_step8_list_flag",
         "top_list_membership",
         "is_reference_variant",
         "score_above_reference_filtered",
         "top15_above_reference_filtered",
         "reference_quadrant",
-    ]:
-        if column in boolean_output_columns:
+    ]
+    boolean_columns = {
+        "top_score_list_flag",
+        "top15_list_flag",
+        "top_step8_list_flag",
+        "is_reference_variant",
+        "score_above_reference_filtered",
+        "top15_above_reference_filtered",
+    }
+    string_columns = {"top_list_membership", "reference_quadrant"}
+    for column in transfer_columns:
+        if column in boolean_columns:
             output[column] = False
-        elif column in string_output_columns:
+        elif column in string_columns:
             output[column] = pd.Series(pd.NA, index=output.index, dtype="object")
         else:
             output[column] = np.nan
@@ -243,31 +363,77 @@ def analyze_metric_comparison(
 
     total_only = output.loc[output["total_count_filter_pass"] & finite_metrics]
     summary_rows: list[dict[str, object]] = []
+    correlation_pairs = [
+        (
+            "step6_high15_vs_step7_expected_score",
+            "step6_high15_probability",
+            "step7_expected_bin_score",
+        ),
+        (
+            "step6_high15_vs_step8_high15_relative",
+            "step6_high15_probability",
+            "step8_high15_relative_enrichment",
+        ),
+        (
+            "step7_expected_score_vs_step8_high15_relative",
+            "step7_expected_bin_score",
+            "step8_high15_relative_enrichment",
+        ),
+    ]
 
     def add_correlation_rows(scope: str, table: pd.DataFrame) -> None:
-        pairs = [
-            (
-                "expected_score_vs_high15_probability",
-                table["expected_bin_score"],
-                table["high15_probability"],
-            ),
-        ]
-        if "top15_vs_unsorted_log2_enrichment" in table.columns:
-            pairs.append(
-                (
-                    "expected_score_vs_top15_unsorted_log2_secondary",
-                    table["expected_bin_score"],
-                    table["top15_vs_unsorted_log2_enrichment"],
-                )
-            )
-        for comparison, left, right in pairs:
+        for comparison, left_column, right_column in correlation_pairs:
             for method in ["spearman", "pearson", "kendall"]:
-                statistic, pvalue, n = safe_correlation(left, right, method)
+                statistic, pvalue, n = safe_correlation(
+                    table[left_column], table[right_column], method
+                )
                 summary_rows.append(
                     {
                         "section": "correlation",
                         "scope": scope,
+                        "comparison": comparison,
+                        "method": method,
                         "metric": f"{method}_{comparison}",
+                        "value": statistic,
+                        "pvalue": pvalue,
+                        "n": n,
+                    }
+                )
+        # Preserve the pre-v0.2.2 metric name.
+        statistic, pvalue, n = safe_correlation(
+            table["step7_expected_bin_score"],
+            table["step6_high15_probability"],
+            "spearman",
+        )
+        summary_rows.append(
+            {
+                "section": "correlation",
+                "scope": scope,
+                "comparison": "legacy_expected_score_vs_high15_probability",
+                "method": "spearman",
+                "metric": "spearman_expected_score_vs_high15_probability",
+                "value": statistic,
+                "pvalue": pvalue,
+                "n": n,
+            }
+        )
+        if "top15_vs_unsorted_log2_enrichment" in table.columns:
+            for method in ["spearman", "pearson", "kendall"]:
+                statistic, pvalue, n = safe_correlation(
+                    table["step7_expected_bin_score"],
+                    table["top15_vs_unsorted_log2_enrichment"],
+                    method,
+                )
+                summary_rows.append(
+                    {
+                        "section": "correlation",
+                        "scope": scope,
+                        "comparison": "expected_score_vs_unsorted_secondary",
+                        "method": method,
+                        "metric": (
+                            f"{method}_expected_score_vs_"
+                            "top15_unsorted_log2_secondary"
+                        ),
                         "value": statistic,
                         "pvalue": pvalue,
                         "n": n,
@@ -277,10 +443,47 @@ def analyze_metric_comparison(
     add_correlation_rows("total_count_filter_only", total_only)
     add_correlation_rows("robust_read_support", supported)
 
+    overlap_pairs = [
+        ("step6_vs_step7", "step6_rank_filtered", "step7_rank_filtered"),
+        ("step6_vs_step8", "step6_rank_filtered", "step8_rank_filtered"),
+        ("step7_vs_step8", "step7_rank_filtered", "step8_rank_filtered"),
+    ]
     overlap_rows: list[dict[str, object]] = []
     for requested_n in sorted({20, top_n, 100}):
-        overlap = rank_overlap(supported, requested_n)
-        overlap_rows.append(overlap)
+        pair_results: dict[str, dict[str, object]] = {}
+        for pair, left_rank, right_rank in overlap_pairs:
+            overlap = rank_overlap(
+                supported, requested_n, left_rank, right_rank, pair
+            )
+            overlap_rows.append(overlap)
+            pair_results[pair] = overlap
+        actual_k = min(requested_n, len(supported))
+        if actual_k:
+            three_sets = [
+                set(supported.nsmallest(actual_k, rank)["variant_id"])
+                for rank in [
+                    "step6_rank_filtered",
+                    "step7_rank_filtered",
+                    "step8_rank_filtered",
+                ]
+            ]
+            three_way_count = len(set.intersection(*three_sets))
+            three_way_percent = 100 * three_way_count / actual_k
+        else:
+            three_way_count = 0
+            three_way_percent = float("nan")
+        overlap_rows.append(
+            {
+                "pair": "step6_step7_step8_three_way",
+                "requested_top_n": requested_n,
+                "actual_top_n": actual_k,
+                "overlap_count": three_way_count,
+                "overlap_percent_of_each_list": three_way_percent,
+                "jaccard": float("nan"),
+            }
+        )
+        # Preserve legacy summary names for the informative Step6-vs-Step7 pair.
+        legacy = pair_results["step6_vs_step7"]
         for metric in [
             "actual_top_n",
             "overlap_count",
@@ -291,24 +494,32 @@ def analyze_metric_comparison(
                 {
                     "section": "rank_overlap",
                     "scope": "robust_read_support",
+                    "comparison": "step6_vs_step7",
+                    "method": "top_n_overlap",
                     "metric": f"top{requested_n}_{metric}",
-                    "value": overlap[metric],
+                    "value": legacy[metric],
                     "pvalue": np.nan,
                     "n": len(supported),
                 }
             )
 
+    step8_formula_error = (
+        supported["step8_high15_relative_enrichment"]
+        - supported["step6_high15_probability"] / high15_fraction
+    ).abs()
+    step6_step8_rank_mismatches = int(
+        (supported["step6_rank_filtered"] != supported["step8_rank_filtered"]).sum()
+    )
     counts = {
         "variants_total": int(len(output)),
-        "variants_total_count_filter_pass": int(
-            output["total_count_filter_pass"].sum()
-        ),
+        "variants_total_count_filter_pass": int(output["total_count_filter_pass"].sum()),
         "variants_comparison_read_support_pass": int(len(supported)),
         "configured_min_total_count": int(min_total_count),
         "configured_min_unsorted_count": int(min_unsorted_count),
         "configured_min_high_bin_count": int(min_high_bin_count),
         "configured_top_n": int(top_n),
         "actual_top_n": int(actual_top_n),
+        "high15_nominal_population_fraction": high15_fraction,
         "top_list_consensus_count": int(
             supported["top_list_membership"].eq("consensus").sum()
         ),
@@ -320,12 +531,18 @@ def analyze_metric_comparison(
         ),
         "reference_score": reference_score,
         "reference_high15_probability": reference_top15,
+        "maximum_abs_step8_formula_error": (
+            float(step8_formula_error.max()) if len(step8_formula_error) else float("nan")
+        ),
+        "step6_step8_rank_mismatch_count": step6_step8_rank_mismatches,
     }
     for key, value in counts.items():
         summary_rows.append(
             {
                 "section": "count_or_setting",
                 "scope": "all",
+                "comparison": "not_applicable",
+                "method": "not_applicable",
                 "metric": key,
                 "value": value,
                 "pvalue": np.nan,
@@ -345,6 +562,8 @@ def analyze_metric_comparison(
                 {
                     "section": "reference_quadrant",
                     "scope": "robust_read_support",
+                    "comparison": "step6_vs_step7",
+                    "method": "count",
                     "metric": quadrant,
                     "value": int(quadrant_counts.get(quadrant, 0)),
                     "pvalue": np.nan,
@@ -354,19 +573,26 @@ def analyze_metric_comparison(
 
     summary_table = pd.DataFrame(summary_rows)
     overlap_table = pd.DataFrame(overlap_rows)
-    primary_rho_row = summary_table[
-        (summary_table["scope"] == "robust_read_support")
-        & (
-            summary_table["metric"]
-            == "spearman_expected_score_vs_high15_probability"
-        )
-    ]
-    primary_rho = (
-        float(primary_rho_row["value"].iloc[0])
-        if len(primary_rho_row)
-        else float("nan")
+
+    def summary_correlation(comparison: str, method: str = "spearman") -> float:
+        selected = summary_table[
+            (summary_table["scope"] == "robust_read_support")
+            & (summary_table["comparison"] == comparison)
+            & (summary_table["method"] == method)
+        ]
+        return float(selected["value"].iloc[0]) if len(selected) else float("nan")
+
+    primary_rho = summary_correlation("step6_high15_vs_step7_expected_score")
+    step6_step8_rho = summary_correlation(
+        "step6_high15_vs_step8_high15_relative"
     )
-    selected_overlap = rank_overlap(supported, top_n)
+    selected_overlap = rank_overlap(
+        supported,
+        top_n,
+        "step6_rank_filtered",
+        "step7_rank_filtered",
+        "step6_vs_step7",
+    )
     overlap_percent = float(selected_overlap["overlap_percent_of_each_list"])
     if np.isfinite(primary_rho) and primary_rho >= 0.70 and overlap_percent >= 60:
         agreement = "strong"
@@ -376,21 +602,30 @@ def analyze_metric_comparison(
         agreement = "weak_or_endpoint_divergent"
     summary_json = {
         **counts,
+        "population_fractions": fractions.tolist(),
         "primary_spearman_rho": primary_rho,
+        "step6_vs_step7_spearman_rho": primary_rho,
+        "step6_vs_step8_spearman_rho": step6_step8_rho,
         "top_n_overlap_percent": overlap_percent,
+        "step6_vs_step7_top_n_overlap_percent": overlap_percent,
         "agreement_class": agreement,
+        "step8_identity_check_pass": bool(
+            step6_step8_rank_mismatches == 0
+            and (len(step8_formula_error) == 0 or step8_formula_error.max() < 1e-12)
+        ),
         "recommended_interpretation": (
-            "Use conditional High15 probability as the primary endpoint for "
-            "cloning priority. Use expected score as supporting evidence for a "
-            "clean whole-distribution high shift; do not require Top-N overlap."
+            "Rank clones by Step 6 conditional High15 probability. Use Step 7 "
+            "expected score as whole-profile support. Use Step 8 p/w to visualize "
+            "which bins are enriched; its High15 scalar is a rescaling of Step 6, "
+            "not an independent endpoint."
         ),
     }
 
     supported = supported.sort_values(
-        ["top_list_membership", "top15_rank_filtered", "score_rank_filtered"]
+        ["top_list_membership", "step6_rank_filtered", "step7_rank_filtered"]
     )
     output = output.sort_values(
-        ["comparison_read_support_pass", "top15_rank_filtered"],
+        ["comparison_read_support_pass", "step6_rank_filtered"],
         ascending=[False, True],
         na_position="last",
     )
@@ -399,14 +634,15 @@ def analyze_metric_comparison(
 
 def main() -> int:
     args = parse_args()
-    separator = "\t" if args.input.suffix.lower() in {".tsv", ".txt"} else ","
-    result = pd.read_csv(args.input, sep=separator)
+    result = read_table(args.input)
+    fractions = read_population_fractions(args.sample_map)
     output, supported, summary, overlap, summary_json = analyze_metric_comparison(
         result,
         min_total_count=args.min_total_count,
         min_unsorted_count=args.min_unsorted_count,
         min_high_bin_count=args.min_high_bin_count,
         top_n=args.top_n,
+        population_fractions=fractions,
     )
     args.outdir.mkdir(parents=True, exist_ok=True)
     output.to_csv(
@@ -427,6 +663,24 @@ def main() -> int:
         index=False,
         encoding="utf-8-sig",
     )
+
+    # Explicit Step 6/7/8 files make the new outputs discoverable while the
+    # legacy filenames above remain available to older notebooks and reports.
+    supported.to_csv(
+        args.outdir / "step6_step7_step8_metrics.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    summary.loc[summary["section"].eq("correlation")].to_csv(
+        args.outdir / "step6_step7_step8_correlations.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    overlap.to_csv(
+        args.outdir / "step6_step7_step8_topn_overlap.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
     supported[supported["top_list_membership"] == "consensus"].to_csv(
         args.outdir / "top_candidates_consensus.csv",
         index=False,
@@ -442,21 +696,33 @@ def main() -> int:
         index=False,
         encoding="utf-8-sig",
     )
+    json_text = json.dumps(summary_json, indent=2, ensure_ascii=False)
     (args.outdir / "metric_comparison_summary.json").write_text(
-        json.dumps(summary_json, indent=2, ensure_ascii=False), encoding="utf-8"
+        json_text, encoding="utf-8"
     )
-    print(f"Metric comparison written to: {args.outdir}")
+    (args.outdir / "step6_step7_step8_summary.json").write_text(
+        json_text, encoding="utf-8"
+    )
+    print(f"Step 6/7/8 comparison written to: {args.outdir}")
     print(
         "Shared comparison universe: "
         f"{summary_json['variants_comparison_read_support_pass']:,} UTRs"
     )
-    print(f"Spearman rho: {summary_json['primary_spearman_rho']:.4f}")
     print(
-        f"Top {summary_json['actual_top_n']} overlap: "
-        f"{summary_json['top_list_consensus_count']:,} "
-        f"({summary_json['top_n_overlap_percent']:.2f}%)"
+        "Step 6 vs Step 7 Spearman rho: "
+        f"{summary_json['step6_vs_step7_spearman_rho']:.4f}"
     )
-    print(f"Agreement class: {summary_json['agreement_class']}")
+    print(
+        f"Step 6 vs Step 7 Top {summary_json['actual_top_n']} overlap: "
+        f"{summary_json['top_list_consensus_count']:,} "
+        f"({summary_json['step6_vs_step7_top_n_overlap_percent']:.2f}%)"
+    )
+    print(
+        "Step 6 vs Step 8 identity: "
+        f"rho={summary_json['step6_vs_step8_spearman_rho']:.4f}, "
+        f"rank mismatches={summary_json['step6_step8_rank_mismatch_count']}"
+    )
+    print(f"Agreement class (Step 6 vs 7): {summary_json['agreement_class']}")
     return 0
 
 

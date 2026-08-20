@@ -401,25 +401,30 @@ bash run_pipeline.sh bimodality-qc
 검사하고 read-count 구간별 양극화 후보 비율을 계산합니다. 기준과 해석은
 [BIMODALITY_QC_KO.md](BIMODALITY_QC_KO.md)를 참조하세요.
 
-Expected score와 conditional High15 probability의 관계를 비교하려면 Python
-환경에서 다음을 실행합니다.
+`analyze`는 아래 scoring-step export와 metric comparison을 자동 실행합니다. 이미
+생성된 결과에서 Step 6·7·8 비교만 다시 만들려면 Python 환경에서 실행합니다.
 
 ```bash
 bash run_pipeline.sh compare-metrics
 ```
 
-이 명령은 total six-bin raw count가 200 이하인 UTR를 제외하고 두 지표의 Spearman
-상관성, rank 관계, Top 20/50/100 중복과 discordant 후보를 계산합니다. 자세한 기준은
+이 명령은 total six-bin raw count가 200 미만인 UTR를 제외하고 Step 6 High15,
+Step 7 expected score, Step 8 relative enrichment의 Spearman 상관성, rank 관계,
+Top 20/50/100 중복과 discordant 후보를 계산합니다. Step 6과 Step 8의 scalar rank는
+수학적으로 같으므로 rho=1과 overlap=100%인지 self-audit합니다. 자세한 기준은
 [METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 참조하세요.
 
 | 파일 | 계산 단계 | 의미 |
 |---|---|---|
-| `01_raw_counts.csv` | Raw count | variant count matrix의 원래 count |
-| `02_depth_normalized_frequency.csv` | Depth normalization | `c_ib / N_b`; 각 bin 내 UTR 비율 |
-| `03_bin_size_corrected_mass.csv` | Bin-size correction | `w_b × c_ib/N_b` |
-| `04_within_utr_bin_probability.csv` | Within-UTR normalization | UTR별 bin1–6 합을 1로 정규화 |
-| `05_score_contributions_and_final_score.csv` | Weighted score | probability에 6–1점을 곱해 합산 |
-| `06_all_steps_combined_audit.csv` | 전체 결합 | 한 UTR의 모든 중간값을 한 행에서 추적 |
+| `step01_raw_counts.csv` | Raw count | variant count matrix의 원래 count |
+| `step02_depth_normalized_frequency.csv` | Depth normalization | `f_ib=c_ib/N_b`; 각 bin 내 UTR 비율 |
+| `step03_bin_size_corrected_mass.csv` | Bin-size correction | `a_ib=w_b f_ib` |
+| `step04_corrected_mass_total.csv` | UTR mass total | `A_i=sum_b a_ib` |
+| `step05_within_utr_probability.csv` | Within-UTR normalization | `p_ib=a_ib/A_i`; 행의 합이 1 |
+| `step06_high15_probability.csv` | Primary endpoint | `H_i=p_i1+p_i2` |
+| `step07_expected_score.csv` | Supporting score | `S_i=sum_b p_ib(7-b)` |
+| `step08_relative_enrichment_profile.csv` | Profile | `R_ib=p_ib/w_b`, `L_ib=log2(R_ib)` |
+| `step09_all_steps_audit.csv` | 전체 결합 | 한 UTR의 모든 중간값을 한 행에서 추적 |
 
 `probability`는 NGS read 확률이 아니라 다음 조건부 세포분율 추정치입니다.
 
@@ -477,6 +482,10 @@ results/sortseq/figures/metric_comparison/21_expected_score_vs_high15_probabilit
 results/sortseq/figures/metric_comparison/22_score_rank_vs_top15_rank.png
 results/sortseq/figures/metric_comparison/23_top_candidate_overlap.png
 results/sortseq/figures/metric_comparison/24_discordant_candidate_bin_heatmap.png
+results/sortseq/figures/metric_comparison/25_step6_step7_step8_correlation.png
+results/sortseq/figures/metric_comparison/26_step6_step7_step8_topn_overlap.png
+results/sortseq/figures/metric_comparison/27_top_high15_relative_enrichment_heatmap.png
+results/sortseq/figures/metric_comparison/28_group_median_relative_enrichment_profiles.png
 results/sortseq/figures/metric_comparison/metric_comparison_figures.pdf
 results/sortseq/figures/all_utr_profiles/25_all_utr_bin_probability_heatmap.png
 results/sortseq/figures/all_utr_profiles/26_all_utr_relative_enrichment_heatmap.png

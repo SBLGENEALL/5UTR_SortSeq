@@ -88,8 +88,9 @@ BIMODALITY_MIN_HIGH_TAIL_PROBABILITY="${BIMODALITY_MIN_HIGH_TAIL_PROBABILITY:-0.
 BIMODALITY_MIN_LOW_TAIL_PROBABILITY="${BIMODALITY_MIN_LOW_TAIL_PROBABILITY:-0.20}"
 BIMODALITY_MAX_MIDDLE_PROBABILITY="${BIMODALITY_MAX_MIDDLE_PROBABILITY:-0.30}"
 BIMODALITY_MAX_VALLEY_RATIO="${BIMODALITY_MAX_VALLEY_RATIO:-0.75}"
-METRIC_COMPARE_MIN_TOTAL_COUNT="${METRIC_COMPARE_MIN_TOTAL_COUNT:-201}"
-METRIC_COMPARE_MIN_UNSORTED_COUNT="${METRIC_COMPARE_MIN_UNSORTED_COUNT:-50}"
+METRIC_COMPARE_MIN_TOTAL_COUNT="${METRIC_COMPARE_MIN_TOTAL_COUNT:-200}"
+# Step 6/7/8 are conditional on the sorted target gate, so unsorted is QC only.
+METRIC_COMPARE_MIN_UNSORTED_COUNT="${METRIC_COMPARE_MIN_UNSORTED_COUNT:-0}"
 METRIC_COMPARE_MIN_HIGH_BIN_COUNT="${METRIC_COMPARE_MIN_HIGH_BIN_COUNT:-20}"
 METRIC_COMPARE_TOP_N="${METRIC_COMPARE_TOP_N:-50}"
 
@@ -508,6 +509,10 @@ run_analyze() {
     --jackpot-max-bin-probability "${JACKPOT_MAX_BIN_PROBABILITY}" \
     --jackpot-max-detected-bins "${JACKPOT_MAX_DETECTED_BINS}" \
     --reference-variant-id "${REFERENCE_VARIANT_ID}"
+  # These Python-only post-analysis steps share the same count matrix and make
+  # the complete Step 1-8 audit plus Step 6/7/8 comparison in one command.
+  run_scoring_steps
+  run_compare_metrics
   run_profile_qc
   stage_complete
 }
@@ -526,7 +531,7 @@ run_plot() {
       "${RESULTS_DIR}/sortseq/metric_comparison" \
       "${RESULTS_DIR}/sortseq/figures/metric_comparison"
   else
-    echo "Metric-comparison CSVs not found; run 'bash run_pipeline.sh compare-metrics' to add figures 21-24."
+    echo "Metric-comparison CSVs not found; run 'bash run_pipeline.sh compare-metrics' to add figures 21-28."
   fi
   stage_complete
 }
@@ -536,7 +541,7 @@ run_scoring_steps() {
   require_path "${SAMPLE_MAP}" "sample map"
   local matrix="${RESULTS_DIR}/library_qc/combined/variant_count_matrix.csv"
   require_path "${matrix}" "NGS_LibraryQC variant count matrix"
-  echo "Exporting five scoring steps from: ${matrix}"
+  echo "Exporting eight auditable calculation steps from: ${matrix}"
   "${PYTHON_BIN}" "${REPO_DIR}/scripts/export_scoring_steps.py" \
     --matrix "${matrix}" \
     --sample-map "${SAMPLE_MAP}" \
@@ -572,10 +577,13 @@ run_bimodality_qc() {
 run_compare_metrics() {
   local result_table="${RESULTS_DIR}/sortseq/utr_results_full.tsv"
   require_path "${result_table}" "Sort-seq result table"
-  echo "Comparing expected score and conditional High15 probability on a shared read-supported universe"
+  : "${SAMPLE_MAP:?SAMPLE_MAP is required}"
+  require_path "${SAMPLE_MAP}" "sample map"
+  echo "Comparing Steps 6, 7, and 8 on a shared read-supported UTR universe"
   "${PYTHON_BIN}" "${REPO_DIR}/scripts/compare_metrics.py" \
     --input "${result_table}" \
     --outdir "${RESULTS_DIR}/sortseq/metric_comparison" \
+    --sample-map "${SAMPLE_MAP}" \
     --min-total-count "${METRIC_COMPARE_MIN_TOTAL_COUNT}" \
     --min-unsorted-count "${METRIC_COMPARE_MIN_UNSORTED_COUNT}" \
     --min-high-bin-count "${METRIC_COMPARE_MIN_HIGH_BIN_COUNT}" \
