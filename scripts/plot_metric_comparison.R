@@ -308,7 +308,7 @@ if (nrow(discordant) > 0) {
     lapply(seq_len(nrow(discordant)), function(row_number) {
       data.frame(
         variant_id = discordant$display_id[[row_number]],
-        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 6:1)),
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
         probability = as.numeric(unlist(
           discordant[row_number, probability_columns], use.names = FALSE
         )),
@@ -452,8 +452,9 @@ if ("pair" %in% colnames(overlap_table)) {
   }
 }
 
-# 27: Step-8 profile heatmap. Bins are deliberately ordered low-to-high so a
-# high-expression tail appears on the right. Neutral relative enrichment is 0.
+# 27: Step-8 profile heatmap. Bins follow their experimental numbering,
+# bin1-to-bin6, so the highest-expression population appears on the left.
+# Neutral relative enrichment is 0.
 relative_columns <- paste0("bin", 1:6, "_log2_relative_enrichment")
 if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
   display_n <- min(50, nrow(comparison))
@@ -471,7 +472,7 @@ if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
     lapply(seq_len(nrow(profile_candidates)), function(row_number) {
       data.frame(
         variant_id = profile_candidates$display_id[[row_number]],
-        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 6:1)),
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
         log2_relative_enrichment = as.numeric(unlist(
           profile_candidates[row_number, relative_columns], use.names = FALSE
         )),
@@ -495,8 +496,8 @@ if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
     ) +
     ggplot2::labs(
       title = "Step-8 relative-enrichment profiles of Top High15 candidates",
-      subtitle = "Low fluorescence is left; high fluorescence is right; white means neutral (p/w = 1)",
-      x = "FACS bin (low to high expression)", y = "UTR",
+      subtitle = "bin1 (highest fluorescence) is left; white means neutral (p/w = 1)",
+      x = "FACS bin (bin1 = highest mCherry)", y = "UTR",
       fill = "log2(p / w)"
     ) +
     theme_comparison() +
@@ -534,7 +535,7 @@ if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
       table <- group_rows[[group_name]]
       data.frame(
         group = group_name,
-        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 6:1)),
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
         median_log2_relative_enrichment = vapply(
           relative_columns,
           function(column) stats::median(table[[column]], na.rm = TRUE),
@@ -568,13 +569,77 @@ if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
     ) +
     ggplot2::labs(
       title = "Median relative-enrichment profiles of candidate groups",
-      subtitle = "A high-expression profile rises toward bin1 on the right",
-      x = "FACS bin (low to high expression)",
+      subtitle = "A high-expression profile is elevated toward bin1 on the left",
+      x = "FACS bin (bin1 = highest mCherry)",
       y = "Median log2(relative enrichment p/w)", color = NULL
     ) +
     theme_comparison()
   save_png("28_group_median_relative_enrichment_profiles.png", p_median_profile)
   plots[["28"]] <- p_median_profile
+}
+
+# 29: individual top-candidate profiles. Unlike the group median, this figure
+# exposes broad, monotonic, or irregular shapes for each selected UTR.
+if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
+  individual_n <- min(24, nrow(comparison))
+  individual_candidates <- comparison[
+    order(comparison$step6_rank_filtered, comparison$step7_rank_filtered),
+    , drop = FALSE
+  ]
+  individual_candidates <- head(individual_candidates, individual_n)
+  individual_candidates$display_id <- paste0(
+    individual_candidates$variant_id,
+    " | H rank ", individual_candidates$step6_rank_filtered
+  )
+  individual_profiles <- do.call(
+    rbind,
+    lapply(seq_len(nrow(individual_candidates)), function(row_number) {
+      data.frame(
+        variant_id = individual_candidates$display_id[[row_number]],
+        bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+        bin_number = 1:6,
+        log2_relative_enrichment = as.numeric(unlist(
+          individual_candidates[row_number, relative_columns], use.names = FALSE
+        )),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  individual_profiles$variant_id <- factor(
+    individual_profiles$variant_id,
+    levels = individual_candidates$display_id
+  )
+  p_individual_profiles <- ggplot2::ggplot(
+    individual_profiles,
+    ggplot2::aes(
+      x = bin, y = log2_relative_enrichment,
+      group = variant_id
+    )
+  ) +
+    ggplot2::geom_hline(
+      yintercept = 0, linetype = "dashed", color = colors[["muted"]],
+      linewidth = 0.45
+    ) +
+    ggplot2::geom_line(color = "#D55E00", linewidth = 0.85) +
+    ggplot2::geom_point(color = "#D55E00", size = 1.7) +
+    ggplot2::facet_wrap(~variant_id, ncol = 4) +
+    ggplot2::labs(
+      title = "Individual Step-8 profiles of Top High15 candidates",
+      subtitle = "Top 24 by Step 6; bin1 (highest mCherry) is shown at the left",
+      x = "FACS bin (bin1 = highest mCherry)",
+      y = "log2(relative enrichment p/w)"
+    ) +
+    theme_comparison() +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(size = 8, face = "bold"),
+      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+      panel.grid.minor = ggplot2::element_blank()
+    )
+  save_png(
+    "29_top_high15_individual_relative_enrichment_profiles.png",
+    p_individual_profiles, 13.2, max(7.5, ceiling(individual_n / 4) * 1.65)
+  )
+  plots[["29"]] <- p_individual_profiles
 }
 
 plot_statistics <- data.frame(

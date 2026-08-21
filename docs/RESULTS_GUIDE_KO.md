@@ -123,9 +123,10 @@ R 그림은 `results/sortseq/figures/strict/`에 생성됩니다. Probability he
 `log2(probability / population fraction)`을 사용하므로 bin1–6의 서로 다른 크기를
 제거하고 어느 bin에 상대적으로 농축됐는지 보여줍니다.
 
-새 cloning list는 `total_6bin_count >= 200`, `unsorted_count >= 50`,
-`high_bin_raw_count >= 20`을 eligibility로 사용한 뒤 technical bootstrap과 jackpot
-flag로 안정성을 구분합니다. 핵심 파일은 `top_candidates_for_cloning.csv`입니다.
+새 cloning list는 `total_6bin_count >= 200`과 `high_bin_raw_count >= 20`을
+eligibility로 사용한 뒤 technical bootstrap과 jackpot flag로 안정성을 구분합니다.
+`unsorted_count >= 50`은 representation QC flag로만 남습니다. 핵심 파일은
+`top_candidates_for_cloning.csv`입니다.
 
 ## UTR A형 양극화 분포
 

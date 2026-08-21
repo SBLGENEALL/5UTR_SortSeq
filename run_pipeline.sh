@@ -74,6 +74,7 @@ HIGH15_BOOTSTRAP_LOWER_QUANTILE="${HIGH15_BOOTSTRAP_LOWER_QUANTILE:-0.10}"
 HIGH15_BOOTSTRAP_TOP_N="${HIGH15_BOOTSTRAP_TOP_N:-50}"
 HIGH15_BOOTSTRAP_MIN_PROBABILITY="${HIGH15_BOOTSTRAP_MIN_PROBABILITY:-0.90}"
 ALL_UTR_PROFILE_CLUSTERS="${ALL_UTR_PROFILE_CLUSTERS:-8}"
+ALL_UTR_PROFILE_MIN_TOTAL_COUNT="${ALL_UTR_PROFILE_MIN_TOTAL_COUNT:-200}"
 STRICT_MIN_UNSORTED_COUNT="${STRICT_MIN_UNSORTED_COUNT:-1000}"
 STRICT_MIN_TOTAL_BIN_COUNT="${STRICT_MIN_TOTAL_BIN_COUNT:-5000}"
 STRICT_RELATIVE_MEDIAN_FRACTION="${STRICT_RELATIVE_MEDIAN_FRACTION:-0.10}"
@@ -531,7 +532,7 @@ run_plot() {
       "${RESULTS_DIR}/sortseq/metric_comparison" \
       "${RESULTS_DIR}/sortseq/figures/metric_comparison"
   else
-    echo "Metric-comparison CSVs not found; run 'bash run_pipeline.sh compare-metrics' to add figures 21-28."
+    echo "Metric-comparison CSVs not found; run 'bash run_pipeline.sh compare-metrics' to add figures 21-29."
   fi
   stage_complete
 }
@@ -556,7 +557,8 @@ run_profile_qc() {
   "${PYTHON_BIN}" "${REPO_DIR}/scripts/cluster_utr_profiles.py" \
     --input "${result_table}" \
     --outdir "${RESULTS_DIR}/sortseq/all_utr_profiles" \
-    --clusters "${ALL_UTR_PROFILE_CLUSTERS}"
+    --clusters "${ALL_UTR_PROFILE_CLUSTERS}" \
+    --min-total-count "${ALL_UTR_PROFILE_MIN_TOTAL_COUNT}"
 }
 
 run_bimodality_qc() {

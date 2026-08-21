@@ -104,11 +104,14 @@ top_candidates_top15_only.csv
 26_step6_step7_step8_topn_overlap.png
 27_top_high15_relative_enrichment_heatmap.png
 28_group_median_relative_enrichment_profiles.png
+29_top_high15_individual_relative_enrichment_profiles.png
 metric_comparison_figures.pdf
 ```
 
-27·28번은 x축을 `bin6 → bin1`로 배치합니다. 따라서 고발현 쪽으로 농축된 UTR는
-오른쪽이 올라가거나 붉게 나타납니다. y축은 `log2(p/w)`입니다.
+27–29번은 x축을 `bin1 → bin6`로 배치합니다. 따라서 고발현 쪽으로 농축된 UTR는
+**왼쪽(bin1·2)**이 올라가거나 붉게 나타납니다. y축은 `log2(p/w)`입니다. 29번은
+Step 6 상위 24개 UTR를 개별 panel로 보여주므로 group median에 가려진 불규칙하거나
+넓은 profile도 확인할 수 있습니다.
 
 - `0`: 그 bin의 nominal size와 같은 중립 수준
 - `+1`: nominal 대비 2배 농축

@@ -3,14 +3,16 @@
 ## 무엇을 보여주는가
 
 Top 50만 보는 그림과 달리, 이 QC는 **read-support 기준을 통과한 모든 UTR**의
-`bin1_probability`–`bin6_probability`를 함께 보여줍니다. 현재 기본 기준은
-`top15_read_support_pass=TRUE`, 즉 다음 세 조건입니다.
+`bin1_probability`–`bin6_probability`를 함께 보여줍니다. 현재 기본 기준은 다음 하나입니다.
 
 ```text
-unsorted raw count >= 50
 6-bin raw count 합 >= 200
-bin1 + bin2 raw count 합 >= 20
 ```
+
+정확히 200인 UTR도 포함됩니다. 이 전체-profile overview에는 `bin1+bin2`나 unsorted
+cutoff를 적용하지 않습니다. 그래야 high candidate뿐 아니라 bin4–6 쪽으로 이동한
+low-expression profile도 함께 볼 수 있습니다. 반면 Step 6·7·8 후보 순위 비교는
+high-tail 안정성을 위해 별도로 `bin1+bin2 >= 20`을 적용합니다.
 
 각 UTR의 여섯 probability 합은 1입니다. 예를 들어 다음 세 UTR은 서로 다른 분포
 모양을 가집니다.
@@ -128,10 +130,10 @@ Ward hierarchical clustering을 수행합니다. 기본 cluster 수는 8이며 �
 
 ```bash
 ALL_UTR_PROFILE_CLUSTERS=8
+ALL_UTR_PROFILE_MIN_TOTAL_COUNT=200
 ```
 
 Profile 1은 cluster median expected score가 가장 높은 쪽이 되도록 번호만 재배열합니다.
 따라서 **profile cluster 번호는 후보 rank나 통계적으로 발견된 biological class가
 아닙니다.** 전체 분포를 탐색하기 위한 요약입니다. 최종 cloning 순위는 계속
 `high15_final_rank`와 `top_candidates_for_cloning.csv`를 사용합니다.
-

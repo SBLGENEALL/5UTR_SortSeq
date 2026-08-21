@@ -351,13 +351,15 @@ results/sortseq/easy_report.html
 최종 High15 후보의 eligibility와 안정성 기준은 다음과 같습니다.
 
 ```text
-unsorted >= 50
 total six bins >= 200
 bin1 + bin2 raw support >= 20
 High15 > original
 bootstrap에서 reference 우위 확률 >= 0.90
 single-bin jackpot suspect는 tier3 review
 ```
+
+`unsorted >= 50`은 representation QC flag이며 High15 primary ranking의 hard filter는
+아닙니다.
 
 기존 strict score filter는 강한 read-support QC/보조 결과로 유지되지만 새 High15
 primary rank의 hard filter는 아닙니다.
@@ -408,8 +410,8 @@ bash run_pipeline.sh bimodality-qc
 bash run_pipeline.sh compare-metrics
 ```
 
-이 명령은 total six-bin raw count가 200 미만인 UTR를 제외하고 Step 6 High15,
-Step 7 expected score, Step 8 relative enrichment의 Spearman 상관성, rank 관계,
+이 명령은 total six-bin raw count가 200 미만이거나 bin1+bin2 raw count가 20 미만인
+UTR를 제외하고 Step 6 High15, Step 7 expected score, Step 8 relative enrichment의 Spearman 상관성, rank 관계,
 Top 20/50/100 중복과 discordant 후보를 계산합니다. Step 6과 Step 8의 scalar rank는
 수학적으로 같으므로 rho=1과 overlap=100%인지 self-audit합니다. 자세한 기준은
 [METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 참조하세요.
@@ -486,6 +488,7 @@ results/sortseq/figures/metric_comparison/25_step6_step7_step8_correlation.png
 results/sortseq/figures/metric_comparison/26_step6_step7_step8_topn_overlap.png
 results/sortseq/figures/metric_comparison/27_top_high15_relative_enrichment_heatmap.png
 results/sortseq/figures/metric_comparison/28_group_median_relative_enrichment_profiles.png
+results/sortseq/figures/metric_comparison/29_top_high15_individual_relative_enrichment_profiles.png
 results/sortseq/figures/metric_comparison/metric_comparison_figures.pdf
 results/sortseq/figures/all_utr_profiles/25_all_utr_bin_probability_heatmap.png
 results/sortseq/figures/all_utr_profiles/26_all_utr_relative_enrichment_heatmap.png
@@ -498,7 +501,7 @@ results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 따라서 bin3처럼 원래 더 큰 bin이 09번에서 밝게 보이더라도, 10번에서는 실제 상대
 농축이 bin1 또는 bin2인지 바로 확인할 수 있습니다.
 
-25–28번은 top 후보만이 아니라 `top15_read_support_pass=TRUE`인 전체 UTR를 보여줍니다.
+all_utr_profiles의 25–28번은 top 후보만이 아니라 `total_6bin_count >= 200`인 전체 UTR를 보여줍니다.
 Python 환경에서 먼저 `bash run_pipeline.sh profile-qc`를 실행해야 합니다. 25번은 절대
 bin probability, 26번은 bin 기본 크기 대비 상대 농축, 27번은 유사 분포 cluster의
 평균 구성, 28번은 cluster 내부의 개별 UTR 변이입니다. 상세 해석은

@@ -56,13 +56,14 @@ representation `G_i`도 포함됩니다. 이 실험에서 whole unsorted는 동�
 기본값은 다음과 같습니다.
 
 ```text
-unsorted raw count >= 50
 six-bin total raw count >= 200
 bin1 + bin2 raw count >= 20
 ```
 
 이는 dropout과 극단적으로 희소한 UTR를 제외하는 실용적 eligibility filter이며,
 통계적 유의성이나 정밀도를 보장하는 cutoff가 아닙니다.
+`unsorted raw count >= 50`은 별도의 representation QC flag이며 High15 순위의 hard
+filter는 아닙니다.
 
 ## 기술적 bootstrap과 최종 순위
 

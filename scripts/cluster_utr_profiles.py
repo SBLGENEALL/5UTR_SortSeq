@@ -26,6 +26,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
     parser.add_argument("--clusters", type=int, default=8)
+    parser.add_argument(
+        "--min-total-count",
+        type=int,
+        default=200,
+        help=(
+            "Minimum sum of bin1-bin6 raw reads for inclusion in the "
+            "whole-library profile overview (default: 200)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -36,11 +45,13 @@ def as_bool(values: pd.Series) -> pd.Series:
 def cluster_profiles(
     result: pd.DataFrame,
     requested_clusters: int = 8,
+    min_total_count: int = 200,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     required = {
         "variant_id",
         "expected_bin_score",
         "high15_probability",
+        "total_6bin_count",
         *PROBABILITY_COLUMNS,
     }
     missing = sorted(required.difference(result.columns))
@@ -48,6 +59,8 @@ def cluster_profiles(
         raise ValueError(f"input is missing columns: {missing}")
     if requested_clusters < 2:
         raise ValueError("clusters must be at least 2")
+    if min_total_count < 0:
+        raise ValueError("min_total_count must be nonnegative")
 
     table = result.copy()
     table["variant_id"] = table["variant_id"].astype(str)
@@ -65,14 +78,15 @@ def cluster_profiles(
         if column in table.columns:
             table[column] = pd.to_numeric(table[column], errors="coerce")
 
-    if "top15_read_support_pass" in table.columns:
-        eligibility_column = "top15_read_support_pass"
-    elif "pass_coverage" in table.columns:
-        eligibility_column = "pass_coverage"
-    else:
-        eligibility_column = "all_finite_profiles"
-        table[eligibility_column] = True
-    eligible = as_bool(table[eligibility_column])
+    # The whole-library profile overview must contain low-, middle-, and
+    # high-expression shapes. Therefore it uses only the total six-bin read
+    # floor and deliberately does not inherit the High15-specific bin1+bin2
+    # support filter or the unsorted QC flag.
+    eligibility_column = "total_6bin_count"
+    eligible = (
+        np.isfinite(table["total_6bin_count"])
+        & (table["total_6bin_count"] >= min_total_count)
+    )
     finite = (
         np.isfinite(table[PROBABILITY_COLUMNS]).all(axis=1)
         & np.isfinite(table["expected_bin_score"])
@@ -201,6 +215,10 @@ def cluster_profiles(
         "variants_included": int(len(included)),
         "variants_excluded": int(len(table) - len(included)),
         "eligibility_column": eligibility_column,
+        "minimum_total_6bin_count": int(min_total_count),
+        "eligibility_rule": f"total_6bin_count >= {min_total_count}",
+        "high_bin_support_filter_applied": False,
+        "unsorted_filter_applied": False,
         "requested_clusters": int(requested_clusters),
         "actual_clusters": int(summary["profile_cluster"].nunique()),
         "distance": "Hellinger distance on six-bin probability vectors",
@@ -217,7 +235,11 @@ def main() -> int:
     args = parse_args()
     separator = "\t" if args.input.suffix.lower() in {".tsv", ".txt"} else ","
     result = pd.read_csv(args.input, sep=separator)
-    assignments, summary, manifest = cluster_profiles(result, args.clusters)
+    assignments, summary, manifest = cluster_profiles(
+        result,
+        requested_clusters=args.clusters,
+        min_total_count=args.min_total_count,
+    )
     args.outdir.mkdir(parents=True, exist_ok=True)
     assignments.to_csv(
         args.outdir / "all_utr_profile_assignments.csv",

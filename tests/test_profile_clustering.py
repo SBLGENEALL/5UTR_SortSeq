@@ -42,9 +42,13 @@ class ProfileClusteringTests(unittest.TestCase):
                 for bin_number, value in enumerate(perturbed, start=1):
                     row[f"bin{bin_number}_probability"] = value
                 rows.append(row)
+        # Whole-library profiling must retain low-expression shapes even when
+        # they fail the High15-specific bin1+bin2 support rule.
+        rows[-1]["top15_read_support_pass"] = False
         excluded = rows[0].copy()
         excluded["variant_id"] = "excluded_low_coverage"
         excluded["top15_read_support_pass"] = False
+        excluded["total_6bin_count"] = 100
         rows.append(excluded)
         return pd.DataFrame(rows)
 
@@ -55,7 +59,9 @@ class ProfileClusteringTests(unittest.TestCase):
         self.assertEqual(manifest["variants_input"], 13)
         self.assertEqual(manifest["variants_included"], 12)
         self.assertEqual(manifest["actual_clusters"], 3)
+        self.assertEqual(manifest["eligibility_rule"], "total_6bin_count >= 200")
         self.assertNotIn("excluded_low_coverage", set(assignments["variant_id"]))
+        self.assertIn("low_3", set(assignments["variant_id"]))
         np.testing.assert_allclose(
             assignments[[f"bin{x}_probability" for x in range(1, 7)]].sum(axis=1),
             np.ones(12),
@@ -86,6 +92,12 @@ class ProfileClusteringTests(unittest.TestCase):
     def test_invalid_cluster_count_fails(self):
         with self.assertRaisesRegex(ValueError, "at least 2"):
             MODULE.cluster_profiles(self.make_result(), requested_clusters=1)
+
+    def test_invalid_total_count_cutoff_fails(self):
+        with self.assertRaisesRegex(ValueError, "nonnegative"):
+            MODULE.cluster_profiles(
+                self.make_result(), requested_clusters=3, min_total_count=-1
+            )
 
 
 if __name__ == "__main__":
