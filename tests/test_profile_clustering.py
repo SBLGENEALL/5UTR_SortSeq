@@ -66,10 +66,16 @@ class ProfileClusteringTests(unittest.TestCase):
             assignments[[f"bin{x}_probability" for x in range(1, 7)]].sum(axis=1),
             np.ones(12),
         )
+        np.testing.assert_allclose(
+            assignments[
+                [f"bin{x}_normalized_enrichment_share" for x in range(1, 7)]
+            ].sum(axis=1),
+            np.ones(12),
+        )
         self.assertEqual(sorted(assignments["heatmap_order"]), list(range(1, 13)))
         self.assertGreater(
-            summary.iloc[0]["median_expected_bin_score"],
-            summary.iloc[-1]["median_expected_bin_score"],
+            summary.iloc[0]["median_equal_bin_high_share"],
+            summary.iloc[-1]["median_equal_bin_high_share"],
         )
         high_clusters = set(
             assignments.loc[
@@ -88,6 +94,27 @@ class ProfileClusteringTests(unittest.TestCase):
         self.assertNotEqual(high_clusters, low_clusters)
         reference = assignments[assignments["is_reference_variant"]]
         self.assertEqual(reference["variant_id"].tolist(), ["middle_0"])
+
+    def test_all_utrs_are_exported_and_top_candidates_include_reference(self):
+        assignments, summary, all_profiles, top_profiles, manifest = (
+            MODULE.build_profile_outputs(
+                self.make_result(), requested_clusters=3, top_n=2
+            )
+        )
+        self.assertEqual(len(assignments), 12)
+        self.assertEqual(len(summary), 3)
+        self.assertEqual(len(all_profiles), 13)
+        self.assertEqual(manifest["variants_exported_all"], 13)
+        self.assertEqual(int(top_profiles["top_candidate_selected"].sum()), 2)
+        reference = top_profiles[top_profiles["is_reference_variant"]]
+        self.assertEqual(reference["variant_id"].tolist(), ["middle_0"])
+        self.assertTrue(reference["reference_added_for_plot"].iloc[0])
+        q_columns = [
+            f"bin{x}_normalized_enrichment_share" for x in range(1, 7)
+        ]
+        np.testing.assert_allclose(
+            all_profiles[q_columns].sum(axis=1), np.ones(len(all_profiles))
+        )
 
     def test_invalid_cluster_count_fails(self):
         with self.assertRaisesRegex(ValueError, "at least 2"):

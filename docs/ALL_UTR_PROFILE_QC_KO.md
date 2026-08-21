@@ -1,9 +1,18 @@
-# 전체 UTR 6-bin 분포 시각화
+# 전체 UTR normalized-enrichment profile 시각화
 
 ## 무엇을 보여주는가
 
-Top 50만 보는 그림과 달리, 이 QC는 **read-support 기준을 통과한 모든 UTR**의
-`bin1_probability`–`bin6_probability`를 함께 보여줍니다. 현재 기본 기준은 다음 하나입니다.
+이 QC는 모든 UTR에 대해 다음 값을 계산해 CSV로 저장합니다.
+
+```text
+q_ib = f_ib / sum_k(f_ik)
+     = (p_ib/w_b) / sum_k(p_ik/w_k)
+```
+
+`q`는 UTR마다 bin1–6 합이 1인 **normalized relative-enrichment shape**입니다.
+`p=P(bin|UTR, gate)`와 달리 실제 세포 probability로 부르지 않습니다.
+
+전체 profile clustering과 overview 그림에 사용하는 기준은 다음 하나입니다.
 
 ```text
 6-bin raw count 합 >= 200
@@ -14,8 +23,8 @@ cutoff를 적용하지 않습니다. 그래야 high candidate뿐 아니라 bin4�
 low-expression profile도 함께 볼 수 있습니다. 반면 Step 6·7·8 후보 순위 비교는
 high-tail 안정성을 위해 별도로 `bin1+bin2 >= 20`을 적용합니다.
 
-각 UTR의 여섯 probability 합은 1입니다. 예를 들어 다음 세 UTR은 서로 다른 분포
-모양을 가집니다.
+각 UTR의 여섯 `q` 합은 1입니다. 예를 들어 다음 세 UTR은 서로 다른 normalized
+enrichment 모양을 가집니다.
 
 | UTR | bin1 | bin2 | bin3 | bin4 | bin5 | bin6 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -48,8 +57,16 @@ bash run_pipeline.sh plot 2>&1 | tee \
 ```text
 results/sortseq/all_utr_profiles/all_utr_profile_assignments.csv
 results/sortseq/all_utr_profiles/all_utr_profile_cluster_summary.csv
+results/sortseq/all_utr_profiles/all_utr_normalized_enrichment_profiles.csv
+results/sortseq/all_utr_profiles/top200_normalized_enrichment_profiles.csv
+results/sortseq/all_utr_profiles/top_normalized_enrichment_profiles.csv
 results/sortseq/all_utr_profiles/all_utr_profile_manifest.json
 ```
+
+- `all_utr_normalized_enrichment_profiles.csv`: 약 2,001개 **모든 UTR**의 q 값과
+  coverage/profile eligibility, High15 rank, original 표시
+- `top200_normalized_enrichment_profiles.csv`: High15 상위 200개와 `original`
+  (`original`이 Top 200 밖이어도 비교용으로 마지막에 추가)
 
 ### `all_utr_profile_assignments.csv`
 
@@ -61,6 +78,8 @@ results/sortseq/all_utr_profiles/all_utr_profile_manifest.json
 | `profile_label` | cluster 번호와 포함 UTR 수 |
 | `heatmap_order` | heatmap에서의 행 순서 |
 | `bin1_probability`–`bin6_probability` | UTR별 추정 bin 분포; 합계 1 |
+| `bin1_normalized_enrichment_share`–`bin6_normalized_enrichment_share` | `q=f/sum(f)`; 합계 1 |
+| `equal_bin_high_share` | q1+q2; Top15 probability가 아닌 profile 보조값 |
 | `high15_probability` | bin1 + bin2 probability |
 | `expected_bin_score` | 6–1 weighted score |
 | `is_reference_variant` | original/orginal 여부 |
@@ -69,9 +88,9 @@ results/sortseq/all_utr_profiles/all_utr_profile_manifest.json
 
 ### `all_utr_profile_cluster_summary.csv`
 
-한 행이 한 profile cluster입니다. `binN_mean_probability`는 그 cluster UTR들의 평균
-분포이고 `utr_count`는 포함 UTR 수입니다. `reference_present=TRUE`인 행이 original이
-속한 cluster입니다.
+한 행이 한 profile cluster입니다. `binN_mean_normalized_enrichment_share`는 그 cluster
+UTR들의 평균 q profile이고 `utr_count`는 포함 UTR 수입니다.
+`reference_present=TRUE`인 행이 original이 속한 cluster입니다.
 
 ## R 그림
 
@@ -80,6 +99,12 @@ results/sortseq/figures/all_utr_profiles/25_all_utr_bin_probability_heatmap.png
 results/sortseq/figures/all_utr_profiles/26_all_utr_relative_enrichment_heatmap.png
 results/sortseq/figures/all_utr_profiles/27_profile_cluster_composition.png
 results/sortseq/figures/all_utr_profiles/28_profile_cluster_variability.png
+results/sortseq/figures/all_utr_profiles/29_all_utr_normalized_enrichment_profile_heatmap.png
+results/sortseq/figures/all_utr_profiles/30_normalized_enrichment_profile_cluster_means.png
+results/sortseq/figures/all_utr_profiles/31_normalized_enrichment_profile_cluster_variability.png
+results/sortseq/figures/all_utr_profiles/32_top200_normalized_enrichment_profile_heatmap.png
+results/sortseq/figures/all_utr_profiles/33_top200_normalized_enrichment_profiles_page_01.png
+results/sortseq/figures/all_utr_profiles/top200_normalized_enrichment_profile_pages.pdf
 results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 ```
 
@@ -122,18 +147,34 @@ bin5의 기본 크기가 30%이므로 상대 농축값은 `log2(0.20/0.30)=-0.58
 
 평균만 보면 숨겨질 수 있는 cluster 내부의 넓은 변이와 outlier를 확인합니다.
 
+### 29–31번: normalized enrichment profile
+
+- 29번: `q=f/sum(f)` 전체 UTR heatmap
+- 30번: 8개 profile cluster의 평균 q 구성
+- 31번: cluster 안의 개별 q profile과 평균선
+- 빨간 테두리·별·선: `original` 위치
+
+### 32–33번: High15 Top 200
+
+- 32번: High15 상위 200개의 q heatmap; `bin1`이 왼쪽
+- `original`이 Top 200 밖이어도 마지막 행에 추가하고 빨간색으로 표시
+- 33번: 25개 후보씩 나눈 개별 profile PNG
+- `top200_normalized_enrichment_profile_pages.pdf`: 모든 page를 합친 PDF
+- 각 후보 panel의 빨간 점선은 `original`, 주황선은 후보입니다.
+
 ## 군집 방법과 주의점
 
-여섯 probability에 제곱근 변환을 적용한 뒤 Hellinger distance에 해당하는 공간에서
+여섯 q 값에 제곱근 변환을 적용한 뒤 Hellinger distance에 해당하는 공간에서
 Ward hierarchical clustering을 수행합니다. 기본 cluster 수는 8이며 설정에서 바꿀 수
 있습니다.
 
 ```bash
 ALL_UTR_PROFILE_CLUSTERS=8
 ALL_UTR_PROFILE_MIN_TOTAL_COUNT=200
+ALL_UTR_PROFILE_TOP_N=200
 ```
 
-Profile 1은 cluster median expected score가 가장 높은 쪽이 되도록 번호만 재배열합니다.
+Profile 1은 cluster median `q1+q2`가 가장 높은 쪽이 되도록 번호만 재배열합니다.
 따라서 **profile cluster 번호는 후보 rank나 통계적으로 발견된 biological class가
 아닙니다.** 전체 분포를 탐색하기 위한 요약입니다. 최종 cloning 순위는 계속
 `high15_final_rank`와 `top_candidates_for_cloning.csv`를 사용합니다.

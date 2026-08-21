@@ -95,6 +95,15 @@ class EasyPipelineTests(unittest.TestCase):
         expected = [0.05, 0.10, 0.15, 0.20, 0.30, 0.20]
         observed = [neutral[f"bin{x}_probability"] for x in range(1, 7)]
         np.testing.assert_allclose(observed, expected)
+        normalized = [
+            neutral[f"bin{x}_normalized_enrichment_share"]
+            for x in range(1, 7)
+        ]
+        np.testing.assert_allclose(normalized, np.repeat(1 / 6, 6))
+        self.assertAlmostEqual(
+            neutral["normalized_enrichment_share_sum"], 1.0, places=12
+        )
+        self.assertAlmostEqual(neutral["equal_bin_high_share"], 1 / 3, places=12)
         self.assertAlmostEqual(neutral["high15_enrichment"], 1.0, places=6)
         self.assertAlmostEqual(
             neutral["top15_vs_unsorted_enrichment"], 1.0, delta=0.003
@@ -379,6 +388,7 @@ class EasyPipelineTests(unittest.TestCase):
             ranking = pd.read_csv(outdir / "high15_primary_ranking.csv")
             self.assertEqual(ranking.iloc[0]["variant_id"], "high")
             self.assertIn("high15_robust_rank_score", ranking.columns)
+            self.assertIn("bin1_normalized_enrichment_share", ranking.columns)
             self.assertIn("candidate_tier", ranking.columns)
             self.assertTrue((outdir / "top_candidates_for_cloning.csv").exists())
             self.assertTrue((outdir / "top1_candidates_for_cloning.csv").exists())

@@ -107,6 +107,13 @@ class CompareMetricsTest(unittest.TestCase):
             supported["step8_high15_relative_enrichment"],
             supported["step6_high15_probability"] / 0.15,
         )
+        normalized_columns = [
+            f"bin{x}_normalized_enrichment_share" for x in range(1, 7)
+        ]
+        np.testing.assert_allclose(
+            supported[normalized_columns].sum(axis=1),
+            np.ones(len(supported)),
+        )
         step6_step8_top2 = overlap[
             (overlap["pair"] == "step6_vs_step8")
             & (overlap["requested_top_n"] == 2)

@@ -71,10 +71,11 @@ TOP_HIT_MIN_ENRICHMENT="${TOP_HIT_MIN_ENRICHMENT:-1.0}"
 HIGH15_BOOTSTRAP_REPLICATES="${HIGH15_BOOTSTRAP_REPLICATES:-1000}"
 HIGH15_BOOTSTRAP_SEED="${HIGH15_BOOTSTRAP_SEED:-20260819}"
 HIGH15_BOOTSTRAP_LOWER_QUANTILE="${HIGH15_BOOTSTRAP_LOWER_QUANTILE:-0.10}"
-HIGH15_BOOTSTRAP_TOP_N="${HIGH15_BOOTSTRAP_TOP_N:-50}"
+HIGH15_BOOTSTRAP_TOP_N="${HIGH15_BOOTSTRAP_TOP_N:-200}"
 HIGH15_BOOTSTRAP_MIN_PROBABILITY="${HIGH15_BOOTSTRAP_MIN_PROBABILITY:-0.90}"
 ALL_UTR_PROFILE_CLUSTERS="${ALL_UTR_PROFILE_CLUSTERS:-8}"
 ALL_UTR_PROFILE_MIN_TOTAL_COUNT="${ALL_UTR_PROFILE_MIN_TOTAL_COUNT:-200}"
+ALL_UTR_PROFILE_TOP_N="${ALL_UTR_PROFILE_TOP_N:-200}"
 STRICT_MIN_UNSORTED_COUNT="${STRICT_MIN_UNSORTED_COUNT:-1000}"
 STRICT_MIN_TOTAL_BIN_COUNT="${STRICT_MIN_TOTAL_BIN_COUNT:-5000}"
 STRICT_RELATIVE_MEDIAN_FRACTION="${STRICT_RELATIVE_MEDIAN_FRACTION:-0.10}"
@@ -93,7 +94,7 @@ METRIC_COMPARE_MIN_TOTAL_COUNT="${METRIC_COMPARE_MIN_TOTAL_COUNT:-200}"
 # Step 6/7/8 are conditional on the sorted target gate, so unsorted is QC only.
 METRIC_COMPARE_MIN_UNSORTED_COUNT="${METRIC_COMPARE_MIN_UNSORTED_COUNT:-0}"
 METRIC_COMPARE_MIN_HIGH_BIN_COUNT="${METRIC_COMPARE_MIN_HIGH_BIN_COUNT:-20}"
-METRIC_COMPARE_TOP_N="${METRIC_COMPARE_TOP_N:-50}"
+METRIC_COMPARE_TOP_N="${METRIC_COMPARE_TOP_N:-200}"
 
 # Multiprocessing stages own the parallelism. Prevent BLAS/OpenMP libraries
 # loaded by individual workers from multiplying 128 workers by extra threads.
@@ -551,14 +552,18 @@ run_scoring_steps() {
 }
 
 run_profile_qc() {
+  : "${SAMPLE_MAP:?SAMPLE_MAP is required}"
   local result_table="${RESULTS_DIR}/sortseq/utr_results_full.tsv"
   require_path "${result_table}" "Sort-seq result table"
+  require_path "${SAMPLE_MAP}" "sample map"
   echo "Clustering all read-supported UTR six-bin profiles"
   "${PYTHON_BIN}" "${REPO_DIR}/scripts/cluster_utr_profiles.py" \
     --input "${result_table}" \
     --outdir "${RESULTS_DIR}/sortseq/all_utr_profiles" \
+    --sample-map "${SAMPLE_MAP}" \
     --clusters "${ALL_UTR_PROFILE_CLUSTERS}" \
-    --min-total-count "${ALL_UTR_PROFILE_MIN_TOTAL_COUNT}"
+    --min-total-count "${ALL_UTR_PROFILE_MIN_TOTAL_COUNT}" \
+    --top-n "${ALL_UTR_PROFILE_TOP_N}"
 }
 
 run_bimodality_qc() {

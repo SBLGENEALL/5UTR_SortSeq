@@ -206,6 +206,18 @@ def analyze_metric_comparison(
         output[f"bin{index}_log2_relative_enrichment"] = np.log2(
             relative.clip(lower=1e-12)
         )
+    relative_columns = [f"bin{x}_relative_enrichment" for x in range(1, 7)]
+    relative_total = output[relative_columns].sum(axis=1).replace(0, np.nan)
+    for index, column in enumerate(relative_columns, start=1):
+        output[f"bin{index}_normalized_enrichment_share"] = (
+            output[column] / relative_total
+        )
+    output["equal_bin_high_share"] = output[
+        ["bin1_normalized_enrichment_share", "bin2_normalized_enrichment_share"]
+    ].sum(axis=1, min_count=2)
+    output["normalized_enrichment_share_sum"] = output[
+        [f"bin{x}_normalized_enrichment_share" for x in range(1, 7)]
+    ].sum(axis=1, min_count=6)
     output["step8_high15_relative_enrichment"] = (
         output["step6_high15_probability"] / high15_fraction
     )

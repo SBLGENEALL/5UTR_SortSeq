@@ -412,7 +412,7 @@ bash run_pipeline.sh compare-metrics
 
 이 명령은 total six-bin raw count가 200 미만이거나 bin1+bin2 raw count가 20 미만인
 UTR를 제외하고 Step 6 High15, Step 7 expected score, Step 8 relative enrichment의 Spearman 상관성, rank 관계,
-Top 20/50/100 중복과 discordant 후보를 계산합니다. Step 6과 Step 8의 scalar rank는
+Top 20/100/200 중복과 discordant 후보를 계산합니다. Step 6과 Step 8의 scalar rank는
 수학적으로 같으므로 rho=1과 overlap=100%인지 self-audit합니다. 자세한 기준은
 [METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 참조하세요.
 
@@ -425,7 +425,7 @@ Top 20/50/100 중복과 discordant 후보를 계산합니다. Step 6과 Step 8�
 | `step05_within_utr_probability.csv` | Within-UTR normalization | `p_ib=a_ib/A_i`; 행의 합이 1 |
 | `step06_high15_probability.csv` | Primary endpoint | `H_i=p_i1+p_i2` |
 | `step07_expected_score.csv` | Supporting score | `S_i=sum_b p_ib(7-b)` |
-| `step08_relative_enrichment_profile.csv` | Profile | `R_ib=p_ib/w_b`, `L_ib=log2(R_ib)` |
+| `step08_relative_enrichment_profile.csv` | Profile | `R_ib=p_ib/w_b`, `L_ib=log2(R_ib)`, `q_ib=R_ib/sum(R_i)` |
 | `step09_all_steps_audit.csv` | 전체 결합 | 한 UTR의 모든 중간값을 한 행에서 추적 |
 
 `probability`는 NGS read 확률이 아니라 다음 조건부 세포분율 추정치입니다.
@@ -488,12 +488,17 @@ results/sortseq/figures/metric_comparison/25_step6_step7_step8_correlation.png
 results/sortseq/figures/metric_comparison/26_step6_step7_step8_topn_overlap.png
 results/sortseq/figures/metric_comparison/27_top_high15_relative_enrichment_heatmap.png
 results/sortseq/figures/metric_comparison/28_group_median_relative_enrichment_profiles.png
-results/sortseq/figures/metric_comparison/29_top_high15_individual_relative_enrichment_profiles.png
+results/sortseq/figures/metric_comparison/29_top200_normalized_enrichment_profile_heatmap.png
 results/sortseq/figures/metric_comparison/metric_comparison_figures.pdf
 results/sortseq/figures/all_utr_profiles/25_all_utr_bin_probability_heatmap.png
 results/sortseq/figures/all_utr_profiles/26_all_utr_relative_enrichment_heatmap.png
 results/sortseq/figures/all_utr_profiles/27_profile_cluster_composition.png
 results/sortseq/figures/all_utr_profiles/28_profile_cluster_variability.png
+results/sortseq/figures/all_utr_profiles/29_all_utr_normalized_enrichment_profile_heatmap.png
+results/sortseq/figures/all_utr_profiles/30_normalized_enrichment_profile_cluster_means.png
+results/sortseq/figures/all_utr_profiles/31_normalized_enrichment_profile_cluster_variability.png
+results/sortseq/figures/all_utr_profiles/32_top200_normalized_enrichment_profile_heatmap.png
+results/sortseq/figures/all_utr_profiles/top200_normalized_enrichment_profile_pages.pdf
 results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 ```
 
@@ -501,10 +506,13 @@ results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 따라서 bin3처럼 원래 더 큰 bin이 09번에서 밝게 보이더라도, 10번에서는 실제 상대
 농축이 bin1 또는 bin2인지 바로 확인할 수 있습니다.
 
-all_utr_profiles의 25–28번은 top 후보만이 아니라 `total_6bin_count >= 200`인 전체 UTR를 보여줍니다.
+all_utr_profiles의 25–31번은 top 후보만이 아니라 `total_6bin_count >= 200`인 전체 UTR를 보여줍니다.
 Python 환경에서 먼저 `bash run_pipeline.sh profile-qc`를 실행해야 합니다. 25번은 절대
 bin probability, 26번은 bin 기본 크기 대비 상대 농축, 27번은 유사 분포 cluster의
-평균 구성, 28번은 cluster 내부의 개별 UTR 변이입니다. 상세 해석은
+평균 구성, 28번은 cluster 내부의 개별 UTR 변이입니다. 29–31번은
+`q=f/sum(f)` normalized-enrichment profile이고, 32번과 별도 PDF는 High15 Top 200과
+`original`을 보여줍니다. 모든 약 2,001개 UTR의 실제 q 값은
+`all_utr_normalized_enrichment_profiles.csv`에 저장됩니다. 상세 해석은
 [전체 UTR 6-bin 분포 시각화](ALL_UTR_PROFILE_QC_KO.md)를 보세요.
 
 ## 중단 후 재개하는 방법

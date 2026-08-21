@@ -118,6 +118,18 @@ class ScoringStepExportTests(unittest.TestCase):
                 step8.loc["orginal", relative_columns].to_numpy(dtype=float),
                 np.ones(6),
             )
+            normalized_columns = [
+                f"bin{x}_normalized_enrichment_share" for x in range(1, 7)
+            ]
+            np.testing.assert_allclose(
+                step8.loc["orginal", normalized_columns].to_numpy(dtype=float),
+                np.repeat(1 / 6, 6),
+            )
+            self.assertAlmostEqual(
+                step8.loc["orginal", "normalized_enrichment_share_sum"],
+                1.0,
+                places=12,
+            )
             self.assertAlmostEqual(
                 step8.loc["orginal", "step8_high15_relative_enrichment"],
                 step5.loc["orginal", "high15_probability"] / 0.15,

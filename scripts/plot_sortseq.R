@@ -1011,15 +1011,18 @@ if (all(top15_required %in% colnames(results))) {
 }
 
 # Whole-library six-bin profile overview. The Python profile-qc command first
-# clusters read-supported UTRs by Hellinger distance on their normalized
-# probability vectors. These plots retain every included UTR rather than only
-# displaying the top-ranked candidates.
+# clusters read-supported UTRs by Hellinger distance on their sum-to-one
+# normalized enrichment vectors q=f/sum(f). These plots retain every included
+# UTR rather than only displaying the top-ranked candidates.
 all_profile_dir <- file.path(sortseq_dir, "all_utr_profiles")
 all_profile_assignments_path <- file.path(
   all_profile_dir, "all_utr_profile_assignments.csv"
 )
 all_profile_summary_path <- file.path(
   all_profile_dir, "all_utr_profile_cluster_summary.csv"
+)
+all_profile_top_path <- file.path(
+  all_profile_dir, "top_normalized_enrichment_profiles.csv"
 )
 if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary_path)) {
   all_profile_output_dir <- file.path(output_dir, "all_utr_profiles")
@@ -1041,10 +1044,13 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
     all_profile_summary_path, stringsAsFactors = FALSE, check.names = FALSE
   )
   all_profile$variant_id <- as.character(all_profile$variant_id)
+  normalized_enrichment_columns <- paste0(
+    "bin", 1:6, "_normalized_enrichment_share"
+  )
   for (column in c(
     "profile_cluster", "heatmap_order", "high15_probability",
     "expected_bin_score", "total_6bin_count", "unsorted_count",
-    probability_columns
+    probability_columns, normalized_enrichment_columns
   )) {
     if (column %in% colnames(all_profile)) {
       all_profile[[column]] <- suppressWarnings(as.numeric(all_profile[[column]]))
@@ -1062,12 +1068,18 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
 
   all_profile_required <- c(
     "variant_id", "profile_cluster", "profile_label", "heatmap_order",
-    "is_reference_variant", probability_columns
+    "is_reference_variant", probability_columns, normalized_enrichment_columns
   )
   missing_all_profile <- setdiff(all_profile_required, colnames(all_profile))
   summary_probability_columns <- paste0("bin", 1:6, "_mean_probability")
+  summary_normalized_columns <- paste0(
+    "bin", 1:6, "_mean_normalized_enrichment_share"
+  )
   missing_all_profile_summary <- setdiff(
-    c("profile_cluster", "profile_label", "utr_count", summary_probability_columns),
+    c(
+      "profile_cluster", "profile_label", "utr_count",
+      summary_probability_columns, summary_normalized_columns
+    ),
     colnames(all_profile_summary)
   )
   if (length(missing_all_profile) > 0 || length(missing_all_profile_summary) > 0) {
@@ -1086,7 +1098,7 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
   all_profile_summary$utr_count <- suppressWarnings(
     as.numeric(all_profile_summary$utr_count)
   )
-  for (column in summary_probability_columns) {
+  for (column in c(summary_probability_columns, summary_normalized_columns)) {
     all_profile_summary[[column]] <- suppressWarnings(
       as.numeric(all_profile_summary[[column]])
     )
@@ -1112,6 +1124,10 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
         bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
         probability = as.numeric(unlist(
           all_profile[row_number, probability_columns], use.names = FALSE
+        )),
+        normalized_enrichment_share = as.numeric(unlist(
+          all_profile[row_number, normalized_enrichment_columns],
+          use.names = FALSE
         )),
         stringsAsFactors = FALSE
       )
@@ -1283,6 +1299,17 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
           all_profile_summary[row_number, summary_probability_columns],
           use.names = FALSE
         )),
+        mean_normalized_enrichment_share = as.numeric(unlist(
+          all_profile_summary[row_number, summary_normalized_columns],
+          use.names = FALSE
+        )),
+        reference_present = if (
+          "reference_present" %in% colnames(all_profile_summary)
+        ) {
+          as_bool(all_profile_summary$reference_present[[row_number]])
+        } else {
+          FALSE
+        },
         stringsAsFactors = FALSE
       )
     })
@@ -1371,6 +1398,387 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
   )
   all_profile_plots[["28"]] <- p_profile_variability
 
+  # 29: q=f/sum(f), the sum-to-one normalized relative-enrichment shape.
+  # This is not P(bin|UTR); every row sums to one only to make shapes directly
+  # comparable across UTRs.
+  p_all_normalized_enrichment <- ggplot2::ggplot(
+    profile_long,
+    ggplot2::aes(
+      x = bin, y = variant_id, fill = normalized_enrichment_share
+    )
+  ) +
+    ggplot2::geom_tile(linewidth = 0) +
+    ggplot2::facet_grid(
+      profile_label ~ ., scales = "free_y", space = "free_y", switch = "y"
+    ) +
+    ggplot2::scale_fill_gradientn(
+      colors = viridisLite::viridis(256, option = "C"),
+      labels = scales::percent
+    ) +
+    ggplot2::scale_y_discrete(expand = c(0, 0)) +
+    ggplot2::labs(
+      title = "Whole-library normalized enrichment profiles",
+      subtitle = "q = f / sum(f) = (p/w) / sum(p/w); each UTR row sums to 100%",
+      caption = paste0(
+        "This is a normalized enrichment shape, not cell probability. ",
+        "Red outline marks original/orginal."
+      ),
+      x = "FACS bin (bin1 = highest mCherry)", y = NULL,
+      fill = "Normalized\nenrichment share"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      panel.spacing.y = grid::unit(0.08, "lines"),
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank(),
+      strip.placement = "outside",
+      strip.text.y.left = ggplot2::element_text(
+        angle = 0, color = colors[["ink"]], face = "bold", size = 9
+      ),
+      strip.background = ggplot2::element_rect(fill = "#F2F5F7", color = NA)
+    )
+  if (any(profile_long$is_reference)) {
+    p_all_normalized_enrichment <- p_all_normalized_enrichment +
+      ggplot2::geom_tile(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        fill = NA, color = "#B2182B", linewidth = 0.70
+      )
+  }
+  save_all_profile_png(
+    "29_all_utr_normalized_enrichment_profile_heatmap.png",
+    p_all_normalized_enrichment, 10.5, 13.5
+  )
+  all_profile_plots[["29"]] <- p_all_normalized_enrichment
+
+  # 30: compact eight-profile summary on the same sum-to-one q scale.
+  reference_cluster_marker <- profile_summary_long[
+    profile_summary_long$reference_present &
+      profile_summary_long$bin_number == 1,
+    , drop = FALSE
+  ]
+  p_normalized_cluster_mean <- ggplot2::ggplot(
+    profile_summary_long,
+    ggplot2::aes(
+      x = profile_label, y = mean_normalized_enrichment_share, fill = bin
+    )
+  ) +
+    ggplot2::geom_col(width = 0.72, color = "white", linewidth = 0.2) +
+    ggplot2::scale_fill_manual(values = profile_bin_colors) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent, limits = c(0, 1.09),
+      breaks = seq(0, 1, 0.2),
+      expand = ggplot2::expansion(mult = c(0, 0))
+    ) +
+    ggplot2::labs(
+      title = "Mean normalized enrichment composition of each profile",
+      subtitle = "A red star marks the profile containing original/orginal",
+      x = NULL, y = "Mean normalized enrichment share", fill = "FACS bin"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 30, hjust = 1),
+      panel.grid.major.x = ggplot2::element_blank()
+    )
+  if (nrow(reference_cluster_marker) > 0) {
+    p_normalized_cluster_mean <- p_normalized_cluster_mean +
+      ggplot2::geom_point(
+        data = reference_cluster_marker,
+        ggplot2::aes(x = profile_label, y = 1.045),
+        inherit.aes = FALSE, shape = 8, size = 4.2, stroke = 1.0,
+        color = "#B2182B"
+      )
+  }
+  save_all_profile_png(
+    "30_normalized_enrichment_profile_cluster_means.png",
+    p_normalized_cluster_mean, 12.5, 7.2
+  )
+  all_profile_plots[["30"]] <- p_normalized_cluster_mean
+
+  # 31: individual q profiles inside each cluster; original is the red line.
+  p_normalized_cluster_variability <- ggplot2::ggplot() +
+    ggplot2::geom_line(
+      data = profile_long,
+      ggplot2::aes(
+        x = bin_number, y = normalized_enrichment_share, group = variant_id
+      ),
+      color = "#70808A", alpha = 0.055, linewidth = 0.35
+    ) +
+    ggplot2::geom_line(
+      data = profile_summary_long,
+      ggplot2::aes(
+        x = bin_number, y = mean_normalized_enrichment_share,
+        group = profile_label
+      ),
+      color = colors[["orange"]], linewidth = 1.25
+    ) +
+    ggplot2::geom_point(
+      data = profile_summary_long,
+      ggplot2::aes(x = bin_number, y = mean_normalized_enrichment_share),
+      color = colors[["orange"]], size = 2.0
+    ) +
+    ggplot2::facet_wrap(~profile_label, ncol = 4) +
+    ggplot2::scale_x_continuous(
+      breaks = seq_len(6), labels = paste0("bin", 1:6)
+    ) +
+    ggplot2::scale_y_continuous(labels = scales::percent) +
+    ggplot2::labs(
+      title = "Normalized enrichment shapes within each profile",
+      subtitle = "Thin gray = each UTR; orange = profile mean; red = original/orginal",
+      x = "FACS bin (bin1 = highest mCherry)",
+      y = "Normalized enrichment share"
+    ) +
+    theme_sortseq() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+      panel.grid.minor = ggplot2::element_blank()
+    )
+  if (any(profile_long$is_reference)) {
+    p_normalized_cluster_variability <- p_normalized_cluster_variability +
+      ggplot2::geom_line(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        ggplot2::aes(
+          x = bin_number, y = normalized_enrichment_share, group = variant_id
+        ),
+        color = "#B2182B", linewidth = 1.1
+      ) +
+      ggplot2::geom_point(
+        data = profile_long[profile_long$is_reference, , drop = FALSE],
+        ggplot2::aes(x = bin_number, y = normalized_enrichment_share),
+        color = "#B2182B", size = 1.8
+      )
+  }
+  save_all_profile_png(
+    "31_normalized_enrichment_profile_cluster_variability.png",
+    p_normalized_cluster_variability, 13.5, 9.5
+  )
+  all_profile_plots[["31"]] <- p_normalized_cluster_variability
+
+  # 32–33: primary High15 Top 200 profiles. The heatmap gives a compact
+  # overview; paginated line profiles keep all selected UTRs readable and
+  # overlay original as a dashed red reference in every candidate panel.
+  if (file.exists(all_profile_top_path)) {
+    top_profile <- read.csv(
+      all_profile_top_path, stringsAsFactors = FALSE, check.names = FALSE
+    )
+    for (column in c(
+      "top_profile_order", "high15_final_rank", "high15_probability",
+      "equal_bin_high_share", "expected_bin_score", "total_6bin_count",
+      normalized_enrichment_columns
+    )) {
+      if (column %in% colnames(top_profile)) {
+        top_profile[[column]] <- suppressWarnings(as.numeric(top_profile[[column]]))
+      }
+    }
+    for (column in c(
+      "top_candidate_selected", "reference_added_for_plot",
+      "is_reference_variant"
+    )) {
+      if (column %in% colnames(top_profile)) {
+        top_profile[[column]] <- as_bool(top_profile[[column]])
+      }
+    }
+    top_profile$display_id <- ifelse(
+      top_profile$is_reference_variant,
+      paste0(
+        top_profile$variant_id, " [original; H rank ",
+        ifelse(
+          is.finite(top_profile$high15_final_rank),
+          format(top_profile$high15_final_rank, trim = TRUE), "NA"
+        ), "]"
+      ),
+      paste0(
+        top_profile$variant_id, " [H rank ",
+        format(top_profile$high15_final_rank, trim = TRUE), "]"
+      )
+    )
+    top_profile <- top_profile[
+      order(top_profile$top_profile_order), , drop = FALSE
+    ]
+    top_profile_long <- do.call(
+      rbind,
+      lapply(seq_len(nrow(top_profile)), function(row_number) {
+        data.frame(
+          variant_id = top_profile$display_id[[row_number]],
+          top_profile_order = top_profile$top_profile_order[[row_number]],
+          is_reference = top_profile$is_reference_variant[[row_number]],
+          top_candidate_selected = top_profile$top_candidate_selected[[row_number]],
+          bin_number = seq_len(6),
+          bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
+          normalized_enrichment_share = as.numeric(unlist(
+            top_profile[row_number, normalized_enrichment_columns],
+            use.names = FALSE
+          )),
+          stringsAsFactors = FALSE
+        )
+      })
+    )
+    top_profile_long$variant_id <- factor(
+      top_profile_long$variant_id, levels = rev(top_profile$display_id)
+    )
+    selected_top_n <- sum(top_profile$top_candidate_selected, na.rm = TRUE)
+    p_top_normalized_heatmap <- ggplot2::ggplot(
+      top_profile_long,
+      ggplot2::aes(
+        x = bin, y = variant_id, fill = normalized_enrichment_share
+      )
+    ) +
+      ggplot2::geom_tile(color = "white", linewidth = 0.10) +
+      ggplot2::scale_fill_gradientn(
+        colors = viridisLite::viridis(256, option = "C"),
+        labels = scales::percent
+      ) +
+      ggplot2::labs(
+        title = sprintf(
+          "Top %d High15 normalized enrichment profiles + original",
+          selected_top_n
+        ),
+        subtitle = "Ranked by primary High15; bin1 is the highest-mCherry bin and is shown left",
+        caption = "Red outline marks original/orginal, appended even when outside Top N.",
+        x = "FACS bin", y = "UTR",
+        fill = "Normalized\nenrichment share"
+      ) +
+      theme_sortseq() +
+      ggplot2::theme(
+        panel.grid = ggplot2::element_blank(),
+        axis.text.y = ggplot2::element_text(size = 5.1)
+      )
+    if (any(top_profile_long$is_reference)) {
+      p_top_normalized_heatmap <- p_top_normalized_heatmap +
+        ggplot2::geom_tile(
+          data = top_profile_long[top_profile_long$is_reference, , drop = FALSE],
+          fill = NA, color = "#B2182B", linewidth = 0.9
+        )
+    }
+    save_all_profile_png(
+      "32_top200_normalized_enrichment_profile_heatmap.png",
+      p_top_normalized_heatmap, 11.5,
+      max(12, 2.5 + 0.12 * nrow(top_profile))
+    )
+    all_profile_plots[["32"]] <- p_top_normalized_heatmap
+
+    candidate_profiles <- top_profile[
+      top_profile$top_candidate_selected, , drop = FALSE
+    ]
+    reference_profile <- top_profile[
+      top_profile$is_reference_variant, , drop = FALSE
+    ]
+    page_size <- 25L
+    page_count <- ceiling(nrow(candidate_profiles) / page_size)
+    top_profile_page_plots <- list()
+    if (page_count > 0) {
+      for (page_number in seq_len(page_count)) {
+        page_start <- (page_number - 1L) * page_size + 1L
+        page_end <- min(page_number * page_size, nrow(candidate_profiles))
+        page_table <- candidate_profiles[page_start:page_end, , drop = FALSE]
+        page_table$facet_label <- paste0(
+          page_table$variant_id, " | H rank ",
+          format(page_table$high15_final_rank, trim = TRUE)
+        )
+        page_long <- do.call(
+          rbind,
+          lapply(seq_len(nrow(page_table)), function(row_number) {
+            data.frame(
+              facet_label = page_table$facet_label[[row_number]],
+              bin_number = seq_len(6),
+              normalized_enrichment_share = as.numeric(unlist(
+                page_table[row_number, normalized_enrichment_columns],
+                use.names = FALSE
+              )),
+              stringsAsFactors = FALSE
+            )
+          })
+        )
+        page_long$facet_label <- factor(
+          page_long$facet_label, levels = page_table$facet_label
+        )
+        reference_overlay <- data.frame()
+        if (nrow(reference_profile) > 0) {
+          reference_values <- as.numeric(unlist(
+            reference_profile[1, normalized_enrichment_columns],
+            use.names = FALSE
+          ))
+          reference_overlay <- do.call(
+            rbind,
+            lapply(page_table$facet_label, function(label) {
+              data.frame(
+                facet_label = label,
+                bin_number = seq_len(6),
+                normalized_enrichment_share = reference_values,
+                stringsAsFactors = FALSE
+              )
+            })
+          )
+          reference_overlay$facet_label <- factor(
+            reference_overlay$facet_label, levels = page_table$facet_label
+          )
+        }
+        p_page <- ggplot2::ggplot(
+          page_long,
+          ggplot2::aes(
+            x = bin_number, y = normalized_enrichment_share,
+            group = facet_label
+          )
+        )
+        if (nrow(reference_overlay) > 0) {
+          p_page <- p_page + ggplot2::geom_line(
+            data = reference_overlay,
+            ggplot2::aes(
+              x = bin_number, y = normalized_enrichment_share,
+              group = facet_label
+            ),
+            inherit.aes = FALSE, color = "#B2182B", linetype = "dashed",
+            linewidth = 0.75
+          )
+        }
+        p_page <- p_page +
+          ggplot2::geom_line(color = colors[["orange"]], linewidth = 0.9) +
+          ggplot2::geom_point(color = colors[["orange"]], size = 1.5) +
+          ggplot2::facet_wrap(~facet_label, ncol = 5) +
+          ggplot2::scale_x_continuous(
+            breaks = seq_len(6), labels = paste0("b", 1:6)
+          ) +
+          ggplot2::scale_y_continuous(labels = scales::percent) +
+          ggplot2::labs(
+            title = sprintf(
+              "Top %d normalized enrichment profiles — page %d/%d",
+              selected_top_n, page_number, page_count
+            ),
+            subtitle = "Orange = candidate; dashed red = original/orginal",
+            x = "FACS bin (b1 = highest mCherry)",
+            y = "Normalized enrichment share"
+          ) +
+          theme_sortseq() +
+          ggplot2::theme(
+            strip.text = ggplot2::element_text(size = 7.5, face = "bold"),
+            axis.text.x = ggplot2::element_text(size = 7),
+            panel.grid.minor = ggplot2::element_blank()
+          )
+        page_key <- sprintf("%02d", page_number)
+        save_all_profile_png(
+          sprintf(
+            "33_top200_normalized_enrichment_profiles_page_%s.png",
+            page_key
+          ),
+          p_page, 13.5, 10.0
+        )
+        top_profile_page_plots[[page_key]] <- p_page
+      }
+      grDevices::pdf(
+        file.path(
+          all_profile_output_dir,
+          "top200_normalized_enrichment_profile_pages.pdf"
+        ),
+        width = 13.5, height = 10.0, onefile = TRUE,
+        family = "Helvetica", paper = "special"
+      )
+      for (page_plot in top_profile_page_plots[order(names(top_profile_page_plots))]) {
+        print(page_plot)
+      }
+      grDevices::dev.off()
+    }
+  }
+
   reference_profile_cluster <- NA
   if (any(all_profile$is_reference_variant)) {
     reference_profile_cluster <- all_profile$profile_cluster[
@@ -1380,10 +1788,17 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
   all_profile_plot_statistics <- data.frame(
     metric = c(
       "profile_included_utr", "profile_cluster_count",
-      "reference_profile_cluster", paste0("bin", 1:6, "_fraction_used")
+      "reference_profile_cluster", "maximum_q_row_sum_error",
+      paste0("bin", 1:6, "_fraction_used")
     ),
     value = c(
       nrow(all_profile), nrow(all_profile_summary), reference_profile_cluster,
+      max(
+        abs(
+          rowSums(all_profile[, normalized_enrichment_columns, drop = FALSE]) - 1
+        ),
+        na.rm = TRUE
+      ),
       all_profile_bin_fraction
     ),
     stringsAsFactors = FALSE

@@ -15,7 +15,7 @@ Step8_High15_i = High15_i / (w1+w2) = High15_i / 0.15
 ```
 
 따라서 Step 6과 Step 8 high-tail 값은 숫자의 단위만 다르고 **순위는 완전히
-같아야 합니다**. Spearman rho=1, Top20/50/100 overlap=100%, rank mismatch=0이
+같아야 합니다**. Spearman rho=1, Top20/100/200 overlap=100%, rank mismatch=0이
 정상입니다. 다르게 나오면 생물학적 차이가 아니라 계산 또는 필터 적용 오류입니다.
 
 실제로 정보를 주는 비교는 Step 6과 Step 7입니다.
@@ -104,14 +104,14 @@ top_candidates_top15_only.csv
 26_step6_step7_step8_topn_overlap.png
 27_top_high15_relative_enrichment_heatmap.png
 28_group_median_relative_enrichment_profiles.png
-29_top_high15_individual_relative_enrichment_profiles.png
+29_top200_normalized_enrichment_profile_heatmap.png
 metric_comparison_figures.pdf
 ```
 
 27–29번은 x축을 `bin1 → bin6`로 배치합니다. 따라서 고발현 쪽으로 농축된 UTR는
-**왼쪽(bin1·2)**이 올라가거나 붉게 나타납니다. y축은 `log2(p/w)`입니다. 29번은
-Step 6 상위 24개 UTR를 개별 panel로 보여주므로 group median에 가려진 불규칙하거나
-넓은 profile도 확인할 수 있습니다.
+**왼쪽(bin1·2)**이 올라가거나 붉게 나타납니다. 27·28번은 `log2(p/w)`이고, 29번은
+Step 6 상위 200개에 대해 `q=(p/w)/sum(p/w)=f/sum(f)`를 보여줍니다. 29번의 각 행은
+합계 1이며, `original`은 Top 200 밖이어도 추가되어 빨간 테두리로 표시됩니다.
 
 - `0`: 그 bin의 nominal size와 같은 중립 수준
 - `+1`: nominal 대비 2배 농축
@@ -124,7 +124,7 @@ Step 6 상위 24개 UTR를 개별 panel로 보여주므로 group median에 가�
 
 1. `step6_step7_step8_summary.json`에서 `step8_identity_check_pass=true` 확인
 2. Step 6–7 Spearman rho로 전체 rank 경향 확인
-3. Top20/50/100 overlap으로 실제 상위 후보 겹침 확인
+3. Top20/100/200 overlap으로 실제 상위 후보 겹침 확인
 4. `top_candidates_consensus.csv`는 clean high-shift 보조 목록으로 사용
 5. `top_candidates_top15_only.csv`도 폐기하지 말고 tail-heavy 후보로 개별 검증
 6. 최종 primary 순위는 Step 6 High15로 유지

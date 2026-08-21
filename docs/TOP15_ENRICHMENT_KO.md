@@ -108,15 +108,15 @@ FDR로 표현하지 않습니다. PCR은 필요한 실험 단계로 인정하고
 results/sortseq/high15_primary_ranking.csv
 results/sortseq/high15_candidates.csv
 results/sortseq/top_candidates_for_cloning.csv
-results/sortseq/top50_candidates_for_cloning.csv
+results/sortseq/top200_candidates_for_cloning.csv
 results/sortseq/utr_results_full.tsv
 ```
 
 - `high15_primary_ranking.csv`: eligibility 통과 UTR 전체의 robust High15 순위
 - `high15_candidates.csv`: High15 point estimate가 comparator보다 높은 전체 후보
 - `top_candidates_for_cloning.csv`: tier1·tier2만 모은 실제 cloning 우선순위
-- `default_top_n_cloning_shortlist=TRUE`: 기본 robust-rank Top 50 중 tier1·tier2인 행
-- `top50_candidates_for_cloning.csv`: 위 TRUE 행만 바로 연 파일(Top N 설정 변경 시 파일명도 변경)
+- `default_top_n_cloning_shortlist=TRUE`: 기본 robust-rank Top 200 중 tier1·tier2인 행
+- `top200_candidates_for_cloning.csv`: 위 TRUE 행만 바로 연 파일(Top N 설정 변경 시 파일명도 변경)
 - `top15_enrichment_ranking.csv`: 과거 workflow 호환용 별칭이며 내용은 새 High15 순위
 
 R plotting 결과:

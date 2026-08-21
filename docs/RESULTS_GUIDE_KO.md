@@ -66,7 +66,7 @@ gate representation QC/탐색값으로 분리합니다. 계산과 후보 기준�
 
 Score는 1–6 사이의 ordinal weighted average이므로 fold가 아니라 차이로 해석합니다.
 High15 probability는 비율이므로 original 대비 fold로 비교할 수 있습니다. 그림에서는
-original을 빨간 별, 빨간 테두리 또는 빨간 점선으로 표시합니다. Top50 밖에 있더라도
+original을 빨간 별, 빨간 테두리 또는 빨간 점선으로 표시합니다. Top 200 밖에 있더라도
 heatmap에는 비교 행으로 추가합니다.
 
 기존 rescue/LibraryQC를 다시 계산하지 않고 Python 분석과 R 그림을 나누어 갱신하려면:
@@ -149,7 +149,7 @@ bash run_pipeline.sh bimodality-qc
 
 `expected_bin_score`와 `high15_probability`를
 `bash run_pipeline.sh compare-metrics`로 total six-bin count가 200보다 큰 동일 UTR
-집합에서 Spearman rho와 Top50 overlap으로 진단합니다. High15가 primary이므로
+집합에서 Spearman rho와 Top 20/100/200 overlap으로 진단합니다. High15가 primary이므로
 consensus를 필수 조건으로 삼지 않으며, score-only와 top15-only의 분포 차이를 24번
 heatmap에서 확인합니다. 자세한 실행과 판단은
 [METRIC_COMPARISON_KO.md](METRIC_COMPARISON_KO.md)를 보세요.
@@ -163,13 +163,17 @@ bash run_pipeline.sh profile-qc
 bash run_pipeline.sh plot
 ```
 
-`all_utr_profile_assignments.csv`는 read-support 기준을 통과한 각 UTR의 six-bin
-probability와 profile cluster를 기록합니다. 25번 heatmap에서는 한 가로줄이 UTR
-하나이며 색이 각 bin probability입니다. 26번 heatmap은
+`all_utr_normalized_enrichment_profiles.csv`는 약 2,001개 모든 UTR의
+`q=f/sum(f)` 값과 profile eligibility를 기록합니다. `all_utr_profile_assignments.csv`는
+6-bin 합 200 이상인 UTR의 profile cluster를 기록합니다. 25번 heatmap에서는 한
+가로줄이 UTR 하나이며 색이 각 bin probability입니다. 26번 heatmap은
 `log2(probability / bin fraction)`이므로 bin5처럼 원래 큰 bin이 절대값만으로 밝아
 보이는 효과를 제거합니다.
 
-27번은 cluster 평균, 28번은 cluster 안의 모든 UTR 선과 평균선을 함께 보여줍니다.
+27번은 probability cluster 평균, 28번은 cluster 안의 모든 UTR 선과 평균선을 함께
+보여줍니다. 29–31번은 합계 1인 normalized-enrichment q profile을 보여주며,
+32번과 page PDF는 High15 Top 200 후보를 표시합니다. `original`은 Top 200 밖이어도
+추가되고 빨간색으로 표시됩니다.
 Cluster 번호는 분포를 요약하기 위한 탐색적 라벨이며 cloning 후보 순위가 아닙니다.
 후보 선정은 `high15_final_rank`를 유지하고 cluster는 분포 형태와 outlier를 검토하는
 보조 QC로 사용합니다. 파일별 상세 설명은

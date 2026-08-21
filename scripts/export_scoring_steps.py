@@ -283,6 +283,9 @@ def main() -> int:
     # Canonical Step 8: p_ib / w_b. A neutral UTR equals one in every bin;
     # log2 values equal zero. This is for profile shape, not a second probability.
     relative_enrichment = probability.div(fractions, axis=1)
+    normalized_enrichment = relative_enrichment.div(
+        relative_enrichment.sum(axis=1).replace(0, np.nan), axis=0
+    )
     step8 = metadata.copy()
     for number, sample_id in enumerate(bin_ids, start=1):
         value = relative_enrichment[sample_id]
@@ -290,12 +293,21 @@ def main() -> int:
         step8[f"bin{number}_log2_relative_enrichment"] = np.log2(
             np.clip(value.to_numpy(), 1e-12, None)
         )
+        step8[f"bin{number}_normalized_enrichment_share"] = (
+            normalized_enrichment[sample_id].to_numpy()
+        )
     step8["step8_high15_relative_enrichment"] = (
         high15_probability.to_numpy() / high15_fraction
     )
     step8["step8_high15_log2_relative_enrichment"] = np.log2(
         np.clip(step8["step8_high15_relative_enrichment"].to_numpy(), 1e-12, None)
     )
+    step8["equal_bin_high_share"] = normalized_enrichment.iloc[:, :2].sum(
+        axis=1
+    ).to_numpy()
+    step8["normalized_enrichment_share_sum"] = normalized_enrichment.sum(
+        axis=1
+    ).to_numpy()
 
     reference_id = resolve_reference_id(metadata, args.reference_variant_id)
     if reference_id is not None:
@@ -486,6 +498,7 @@ def main() -> int:
         "score": "S_i = sum_b[p_ib*(7-bin_number_b)]",
         "primary_endpoint": "H_i = p_i1 + p_i2",
         "relative_enrichment_profile": "R_ib = p_ib / w_b; L_ib = log2(R_ib)",
+        "normalized_enrichment_profile": "q_ib = R_ib/sum_k(R_ik) = f_ib/sum_k(f_ik)",
         "step8_scalar_identity": "H_i/(w1+w2), identical ranking to Step 6",
         "primary_rank": "high15_probability descending (bootstrap is added by analyze_sortseq.py)",
         "top15_unsorted_enrichment": (

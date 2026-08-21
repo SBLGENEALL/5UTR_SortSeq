@@ -122,12 +122,14 @@ results/sortseq/reference_comparison.tsv
 results/sortseq/high15_primary_ranking.csv
 results/sortseq/high15_candidates.csv
 results/sortseq/top_candidates_for_cloning.csv
-results/sortseq/top50_candidates_for_cloning.csv
+results/sortseq/top200_candidates_for_cloning.csv
 results/sortseq/top15_enrichment_ranking.csv
 results/sortseq/top15_candidates.csv
 results/sortseq/top15_priority_candidates.csv
 results/sortseq/all_utr_profiles/all_utr_profile_assignments.csv
 results/sortseq/all_utr_profiles/all_utr_profile_cluster_summary.csv
+results/sortseq/all_utr_profiles/all_utr_normalized_enrichment_profiles.csv
+results/sortseq/all_utr_profiles/top200_normalized_enrichment_profiles.csv
 results/sortseq/bimodality_qc/bimodality_summary.csv
 results/sortseq/bimodality_qc/clear_bimodal_candidates.csv
 results/sortseq/bimodality_qc/utra_like_strong_polarization.csv
@@ -171,6 +173,9 @@ QC로 별도 보고합니다.
 PCR 또는 biological uncertainty를 추정하지 않습니다. bin1과 bin2의 개별 unsorted
 enrichment는 hard filter로 사용하지 않습니다.
 
+기본 cloning/plot shortlist는 Top 200입니다. `top200_candidates_for_cloning.csv`와
+normalized-enrichment profile 그림에는 `original`의 순위와 분포가 반드시 표시됩니다.
+
 최종 `top_candidates_for_cloning.csv`에는 안정적인 tier1 clean high-shift와 tier2
 high-tail 후보가 High15 순으로 들어갑니다. 자세한 식과 열 해석은
 [High15 중심 고발현 랭킹](docs/TOP15_ENRICHMENT_KO.md)을 보세요.
@@ -190,8 +195,9 @@ Python 환경에서 QC를 실행한 뒤 R 환경에서 기존 `plot` 명령을 �
 ## Step 6·7·8 직접 비교
 
 `bash run_pipeline.sh compare-metrics`는 동일한 read-supported UTR 집합에서 Step 6
-conditional High15, Step 7 expected score, Step 8 `p/w` relative enrichment를 계산합니다.
-Step 6–7의 Spearman 상관성과 Top 20/50/100 overlap을 보고하고, Step 6–8은 rho=1,
+conditional High15, Step 7 expected score, Step 8 `p/w` relative enrichment와
+`q=f/sum(f)=(p/w)/sum(p/w)` normalized-enrichment profile을 계산합니다.
+Step 6–7의 Spearman 상관성과 Top 20/100/200 overlap을 보고하고, Step 6–8은 rho=1,
 overlap=100%인지 자동 검산합니다. R `plot`을 실행하면
 `figures/metric_comparison/`에 21–29번 그림이 생성됩니다. 자세한 해석은
 [두 scoring 방식 직접 비교](docs/METRIC_COMPARISON_KO.md)를 보세요.
@@ -209,12 +215,13 @@ bash run_pipeline.sh profile-qc
 bash run_pipeline.sh plot
 ```
 
-`profile-qc`는 기본적으로 **bin1–bin6 raw count 합이 200 이상**인 UTR를
-여섯-bin probability 모양에 따라 묶습니다. 낮은 발현 profile도 전체 양상에 포함하기
-위해 이 overview에는 `bin1+2` 또는 unsorted cutoff를 적용하지 않습니다. R은 전체 UTR probability heatmap,
-bin 크기 대비 상대 농축 heatmap, cluster 평균 구성과 cluster 내부 변이를 생성합니다.
-정확히 어떤 UTR가 어느 cluster에 들어갔는지는
-`all_utr_profile_assignments.csv`에서 확인합니다. 자세한 설명은
+`profile-qc`는 모든 UTR에 대해 `q=f/sum(f)=(p/w)/sum(p/w)`를 계산하여
+`all_utr_normalized_enrichment_profiles.csv`에 저장합니다. Cluster와 전체-library 그림은
+**bin1–bin6 raw count 합이 200 이상**인 UTR에 적용하며, `bin1+2` 또는 unsorted cutoff는
+사용하지 않습니다. 별도로 High15 Top 200과 `original`을 heatmap 및 25개씩 나눈
+profile page로 표시합니다. 정확한 cluster와 전체 UTR 값은
+`all_utr_profile_assignments.csv` 및 `all_utr_normalized_enrichment_profiles.csv`에서
+확인합니다. 자세한 설명은
 [전체 UTR 6-bin 분포 시각화](docs/ALL_UTR_PROFILE_QC_KO.md)를 보세요.
 
 ## 계산 전체를 Step 1–8 CSV로 확인

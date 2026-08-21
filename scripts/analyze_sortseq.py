@@ -518,6 +518,15 @@ def analyze(
     reconstructed_gate_frequency = population_mass.sum(axis=1)
     bin_probability = population_mass.div(reconstructed_gate_frequency.replace(0, np.nan), axis=0)
 
+    # Equal-bin normalized enrichment profile.  This is the user's requested
+    # q_ib = f_ib / sum_k(f_ik), and is exactly R_ib / sum_k(R_ik), where
+    # R_ib = p_ib / w_b.  Unlike p_ib it is not a cell-probability estimate;
+    # it is a sum-to-one visualization of relative-enrichment shape.
+    depth_frequency_total = within_bin_frequency.sum(axis=1)
+    normalized_enrichment_share = within_bin_frequency.div(
+        depth_frequency_total.replace(0, np.nan), axis=0
+    )
+
     smooth_bins = (raw_bins + pseudocount).div(
         depths[bin_ids] + pseudocount * n_variants,
         axis=1,
@@ -558,6 +567,9 @@ def analyze(
 
     for number, sample_id in enumerate(bin_ids, start=1):
         result[f"bin{number}_count"] = raw_bins[sample_id]
+        result[f"bin{number}_depth_normalized_frequency"] = within_bin_frequency[
+            sample_id
+        ]
         result[f"bin{number}_probability"] = bin_probability[sample_id]
         result[f"bin{number}_relative_enrichment"] = (
             bin_probability[sample_id] / float(fractions.iloc[number - 1])
@@ -567,6 +579,9 @@ def analyze(
         )
         result[f"bin{number}_vs_unsorted_log2"] = np.log2(
             smooth_bins[sample_id] / smooth_unsorted
+        )
+        result[f"bin{number}_normalized_enrichment_share"] = (
+            normalized_enrichment_share[sample_id]
         )
 
     high5_fraction = float(fractions.iloc[0])
@@ -582,6 +597,12 @@ def analyze(
     result["step8_high15_log2_relative_enrichment"] = result[
         "high15_log2_enrichment"
     ]
+    result["equal_bin_high_share"] = normalized_enrichment_share[
+        bin_ids[:2]
+    ].sum(axis=1)
+    result["normalized_enrichment_share_sum"] = normalized_enrichment_share.sum(
+        axis=1, min_count=1
+    )
 
     # Secondary/exploratory endpoint: combined high-bin composition relative to
     # whole unsorted. This includes both conditional High15 position and target-
@@ -989,6 +1010,8 @@ def analyze(
         "step7_expected_bin_score",
         "step8_high15_relative_enrichment",
         "step8_high15_log2_relative_enrichment",
+        "equal_bin_high_share",
+        "normalized_enrichment_share_sum",
         "score_shift_from_pool",
         "high5_probability",
         "high15_probability",
@@ -1108,6 +1131,7 @@ def analyze(
         ),
         "primary_endpoint": "conditional_high15_probability",
         "secondary_endpoint": "expected_bin_score_6_to_1",
+        "normalized_enrichment_profile": "q_ib=f_ib/sum_k(f_ik)=R_ib/sum_k(R_ik)",
         "unsorted_endpoint_role": "gate_representation_qc_and_exploratory",
         "top_hit_min_unsorted_count_qc_only": top_hit_min_unsorted_count,
         "top_hit_min_unsorted_count": top_hit_min_unsorted_count,
@@ -1137,6 +1161,14 @@ def analyze(
         "gate_vs_unsorted_spearman_p": gate_unsorted_p,
         "min_unsorted_count": min_unsorted_count,
         "min_total_bin_count": min_total_bin_count,
+        "maximum_normalized_enrichment_sum_error": float(
+            np.nanmax(
+                np.abs(
+                    result["normalized_enrichment_share_sum"].to_numpy(dtype=float)
+                    - 1.0
+                )
+            )
+        ),
         **reference_summary,
     }
     return result, essential, summary
@@ -1484,7 +1516,12 @@ def main() -> int:
         "expected_bin_score",
         "high15_weighted_score_support",
         *[f"bin{x}_count" for x in range(1, 7)],
+        *[f"bin{x}_depth_normalized_frequency" for x in range(1, 7)],
         *[f"bin{x}_probability" for x in range(1, 7)],
+        *[f"bin{x}_relative_enrichment" for x in range(1, 7)],
+        *[f"bin{x}_normalized_enrichment_share" for x in range(1, 7)],
+        "equal_bin_high_share",
+        "normalized_enrichment_share_sum",
         "gate_representation_ratio",
         "top15_vs_unsorted_enrichment",
         "top15_vs_unsorted_log2_enrichment",

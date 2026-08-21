@@ -44,7 +44,8 @@ numeric_columns <- c(
   "score_rank_minus_top15_rank", "total_6bin_count",
   paste0("bin", 1:6, "_probability"),
   paste0("bin", 1:6, "_relative_enrichment"),
-  paste0("bin", 1:6, "_log2_relative_enrichment")
+  paste0("bin", 1:6, "_log2_relative_enrichment"),
+  paste0("bin", 1:6, "_normalized_enrichment_share")
 )
 for (column in numeric_columns) {
   if (column %in% colnames(comparison)) {
@@ -398,7 +399,7 @@ if (nrow(correlation_heat) > 0) {
   plots[["25"]] <- p_correlation
 }
 
-# 26: candidate-list overlap at Top20/50/100 for all pairwise comparisons.
+# 26: candidate-list overlap at Top20/100/200 for all pairwise comparisons.
 if ("pair" %in% colnames(overlap_table)) {
   overlap_plot <- overlap_table[
     overlap_table$pair %in% c("step6_vs_step7", "step6_vs_step8", "step7_vs_step8"),
@@ -443,7 +444,7 @@ if ("pair" %in% colnames(overlap_table)) {
       ) +
       ggplot2::labs(
         title = "Top candidate overlap across Steps 6, 7, and 8",
-        subtitle = "Top20, Top50, and Top100 are calculated on the same filtered UTR set",
+        subtitle = "Top20, Top100, and Top200 are calculated on the same filtered UTR set",
         x = "Candidate-list size", y = "Overlap within each list", fill = NULL
       ) +
       theme_comparison()
@@ -578,66 +579,82 @@ if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
   plots[["28"]] <- p_median_profile
 }
 
-# 29: individual top-candidate profiles. Unlike the group median, this figure
-# exposes broad, monotonic, or irregular shapes for each selected UTR.
+# 29: compact Top-200 heatmap on q=R/sum(R)=f/sum(f). This profile sums to one
+# across bins for each UTR and is used for shape visualization, not as
+# P(bin|UTR). original/orginal is appended and outlined even when outside Top N.
 if (all(relative_columns %in% colnames(comparison)) && nrow(comparison) > 0) {
-  individual_n <- min(24, nrow(comparison))
-  individual_candidates <- comparison[
-    order(comparison$step6_rank_filtered, comparison$step7_rank_filtered),
+  candidate_pool <- comparison[!comparison$is_reference_variant, , drop = FALSE]
+  individual_n <- min(200, nrow(candidate_pool))
+  individual_candidates <- candidate_pool[
+    order(candidate_pool$step6_rank_filtered, candidate_pool$step7_rank_filtered),
     , drop = FALSE
   ]
   individual_candidates <- head(individual_candidates, individual_n)
+  individual_candidates$is_reference_variant <- FALSE
+  if (nrow(reference) > 0) {
+    individual_candidates <- rbind(individual_candidates, reference[1, , drop = FALSE])
+  }
   individual_candidates$display_id <- paste0(
     individual_candidates$variant_id,
+    ifelse(individual_candidates$is_reference_variant, " [original]", ""),
     " | H rank ", individual_candidates$step6_rank_filtered
   )
   individual_profiles <- do.call(
     rbind,
     lapply(seq_len(nrow(individual_candidates)), function(row_number) {
+      relative_values <- as.numeric(unlist(
+        individual_candidates[row_number, relative_columns], use.names = FALSE
+      ))
+      normalized_values <- relative_values / sum(relative_values)
       data.frame(
         variant_id = individual_candidates$display_id[[row_number]],
         bin = factor(paste0("bin", 1:6), levels = paste0("bin", 1:6)),
         bin_number = 1:6,
-        log2_relative_enrichment = as.numeric(unlist(
-          individual_candidates[row_number, relative_columns], use.names = FALSE
-        )),
+        normalized_enrichment_share = normalized_values,
+        is_reference = individual_candidates$is_reference_variant[[row_number]],
         stringsAsFactors = FALSE
       )
     })
   )
   individual_profiles$variant_id <- factor(
     individual_profiles$variant_id,
-    levels = individual_candidates$display_id
+    levels = rev(individual_candidates$display_id)
   )
   p_individual_profiles <- ggplot2::ggplot(
     individual_profiles,
     ggplot2::aes(
-      x = bin, y = log2_relative_enrichment,
-      group = variant_id
+      x = bin, y = variant_id, fill = normalized_enrichment_share
     )
   ) +
-    ggplot2::geom_hline(
-      yintercept = 0, linetype = "dashed", color = colors[["muted"]],
-      linewidth = 0.45
+    ggplot2::geom_tile(color = "white", linewidth = 0.10) +
+    ggplot2::scale_fill_gradientn(
+      colors = viridisLite::viridis(256, option = "C"),
+      labels = scales::percent
     ) +
-    ggplot2::geom_line(color = "#D55E00", linewidth = 0.85) +
-    ggplot2::geom_point(color = "#D55E00", size = 1.7) +
-    ggplot2::facet_wrap(~variant_id, ncol = 4) +
     ggplot2::labs(
-      title = "Individual Step-8 profiles of Top High15 candidates",
-      subtitle = "Top 24 by Step 6; bin1 (highest mCherry) is shown at the left",
+      title = sprintf(
+        "Top %d High15 normalized enrichment profiles + original", individual_n
+      ),
+      subtitle = "q = f/sum(f); bin1 (highest mCherry) is shown at the left",
+      caption = "Red outline marks original/orginal; q is normalized enrichment shape, not cell probability.",
       x = "FACS bin (bin1 = highest mCherry)",
-      y = "log2(relative enrichment p/w)"
+      y = "UTR", fill = "Normalized\nenrichment share"
     ) +
     theme_comparison() +
     ggplot2::theme(
-      strip.text = ggplot2::element_text(size = 8, face = "bold"),
-      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
-      panel.grid.minor = ggplot2::element_blank()
+      axis.text.y = ggplot2::element_text(size = 5.1),
+      panel.grid = ggplot2::element_blank()
     )
+  if (any(individual_profiles$is_reference)) {
+    p_individual_profiles <- p_individual_profiles + ggplot2::geom_tile(
+      data = individual_profiles[individual_profiles$is_reference, , drop = FALSE],
+      fill = NA, color = "#B2182B", linewidth = 0.9
+    )
+  }
   save_png(
-    "29_top_high15_individual_relative_enrichment_profiles.png",
-    p_individual_profiles, 13.2, max(7.5, ceiling(individual_n / 4) * 1.65)
+    "29_top200_normalized_enrichment_profile_heatmap.png",
+    p_individual_profiles, 11.5,
+    max(12, 2.5 + 0.12 * nrow(individual_candidates))
   )
   plots[["29"]] <- p_individual_profiles
 }
