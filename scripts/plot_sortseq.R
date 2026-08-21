@@ -1564,7 +1564,7 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
     for (column in c(
       "top_profile_order", "high15_final_rank", "high15_probability",
       "equal_bin_high_share", "expected_bin_score", "total_6bin_count",
-      normalized_enrichment_columns
+      probability_columns, normalized_enrichment_columns
     )) {
       if (column %in% colnames(top_profile)) {
         top_profile[[column]] <- suppressWarnings(as.numeric(top_profile[[column]]))
@@ -1776,6 +1776,357 @@ if (file.exists(all_profile_assignments_path) && file.exists(all_profile_summary
         print(page_plot)
       }
       grDevices::dev.off()
+    }
+
+    # 34: smooth Top-200 fan curves. Panel A intentionally uses the equal-bin
+    # q profile, where w cancels, while Panel B uses the corrected probability
+    # p that defines High15. Curves are visual interpolation between the six
+    # measured bins; points retain the actual bin-level values.
+    if (nrow(candidate_profiles) > 0) {
+      summarize_profile_metric <- function(
+        candidate_table, value_columns, metric_name, reference_table,
+        neutral_values, all_eligible_table
+      ) {
+        do.call(
+          rbind,
+          lapply(seq_len(6), function(bin_number) {
+            values <- as.numeric(candidate_table[[value_columns[[bin_number]]]])
+            values <- values[is.finite(values)]
+            reference_value <- NA_real_
+            if (nrow(reference_table) > 0) {
+              reference_value <- suppressWarnings(as.numeric(
+                reference_table[[value_columns[[bin_number]]]][[1]]
+              ))
+            }
+            all_eligible_values <- suppressWarnings(as.numeric(
+              all_eligible_table[[value_columns[[bin_number]]]]
+            ))
+            all_eligible_values <- all_eligible_values[
+              is.finite(all_eligible_values)
+            ]
+            data.frame(
+              metric = metric_name,
+              bin_number = bin_number,
+              candidate_count = length(values),
+              mean = mean(values),
+              median = stats::median(values),
+              minimum = min(values),
+              percentile_10 = as.numeric(stats::quantile(
+                values, probs = 0.10, names = FALSE, type = 8
+              )),
+              percentile_25 = as.numeric(stats::quantile(
+                values, probs = 0.25, names = FALSE, type = 8
+              )),
+              percentile_75 = as.numeric(stats::quantile(
+                values, probs = 0.75, names = FALSE, type = 8
+              )),
+              percentile_90 = as.numeric(stats::quantile(
+                values, probs = 0.90, names = FALSE, type = 8
+              )),
+              maximum = max(values),
+              original = reference_value,
+              all_eligible_mean = mean(all_eligible_values),
+              neutral_baseline = neutral_values[[bin_number]],
+              stringsAsFactors = FALSE
+            )
+          })
+        )
+      }
+
+      q_curve_statistics <- summarize_profile_metric(
+        candidate_profiles, normalized_enrichment_columns,
+        "normalized_enrichment_q", reference_profile,
+        rep(1 / 6, 6), all_profile
+      )
+      p_curve_statistics <- summarize_profile_metric(
+        candidate_profiles, probability_columns,
+        "corrected_probability_p", reference_profile,
+        all_profile_bin_fraction, all_profile
+      )
+      top200_curve_statistics <- rbind(
+        q_curve_statistics, p_curve_statistics
+      )
+      write.csv(
+        top200_curve_statistics,
+        file.path(
+          all_profile_output_dir,
+          "top200_profile_curve_statistics.csv"
+        ),
+        quote = FALSE, row.names = FALSE
+      )
+
+      q_candidate_matrix <- as.matrix(
+        candidate_profiles[, normalized_enrichment_columns, drop = FALSE]
+      )
+      storage.mode(q_candidate_matrix) <- "double"
+      bin2_neighbor_mean <- rowMeans(
+        q_candidate_matrix[, c(1, 3), drop = FALSE], na.rm = TRUE
+      )
+      bin2_neighbor_ratio <- q_candidate_matrix[, 2] / pmax(
+        bin2_neighbor_mean, 1e-12
+      )
+      top200_bin2_diagnostic <- data.frame(
+        variant_id = candidate_profiles$variant_id,
+        high15_final_rank = candidate_profiles$high15_final_rank,
+        bin1_normalized_enrichment_share = q_candidate_matrix[, 1],
+        bin2_normalized_enrichment_share = q_candidate_matrix[, 2],
+        bin3_normalized_enrichment_share = q_candidate_matrix[, 3],
+        bin2_to_neighbor_mean_ratio = bin2_neighbor_ratio,
+        bin2_valley_below_0_75 = bin2_neighbor_ratio < 0.75,
+        stringsAsFactors = FALSE
+      )
+      write.csv(
+        top200_bin2_diagnostic,
+        file.path(
+          all_profile_output_dir,
+          "top200_bin2_valley_diagnostic.csv"
+        ),
+        quote = FALSE, row.names = FALSE
+      )
+      bin2_valley_count <- sum(
+        top200_bin2_diagnostic$bin2_valley_below_0_75, na.rm = TRUE
+      )
+      bin2_valley_median <- stats::median(
+        top200_bin2_diagnostic$bin2_to_neighbor_mean_ratio,
+        na.rm = TRUE
+      )
+      all_eligible_q_matrix <- as.matrix(
+        all_profile[, normalized_enrichment_columns, drop = FALSE]
+      )
+      storage.mode(all_eligible_q_matrix) <- "double"
+      all_eligible_bin2_ratio <- all_eligible_q_matrix[, 2] / pmax(
+        rowMeans(all_eligible_q_matrix[, c(1, 3), drop = FALSE], na.rm = TRUE),
+        1e-12
+      )
+      original_bin2_ratio <- NA_real_
+      if (nrow(reference_profile) > 0) {
+        original_q <- as.numeric(unlist(
+          reference_profile[1, normalized_enrichment_columns],
+          use.names = FALSE
+        ))
+        original_bin2_ratio <- original_q[[2]] / pmax(
+          mean(original_q[c(1, 3)], na.rm = TRUE), 1e-12
+        )
+      }
+      summarize_bin2_ratio <- function(group_name, ratio_values) {
+        ratio_values <- ratio_values[is.finite(ratio_values)]
+        data.frame(
+          group = group_name,
+          utr_count = length(ratio_values),
+          mean_bin2_to_neighbor_ratio = mean(ratio_values),
+          median_bin2_to_neighbor_ratio = stats::median(ratio_values),
+          below_0_75_count = sum(ratio_values < 0.75),
+          below_0_75_percent = 100 * mean(ratio_values < 0.75),
+          stringsAsFactors = FALSE
+        )
+      }
+      bin2_valley_group_summary <- rbind(
+        summarize_bin2_ratio("Top 200", bin2_neighbor_ratio),
+        summarize_bin2_ratio("All eligible", all_eligible_bin2_ratio),
+        summarize_bin2_ratio("original", original_bin2_ratio)
+      )
+      write.csv(
+        bin2_valley_group_summary,
+        file.path(
+          all_profile_output_dir,
+          "bin2_valley_group_summary.csv"
+        ),
+        quote = FALSE, row.names = FALSE
+      )
+      all_eligible_bin2_median <- bin2_valley_group_summary[
+        bin2_valley_group_summary$group == "All eligible",
+        "median_bin2_to_neighbor_ratio"
+      ][[1]]
+
+      smooth_curve_statistics <- function(statistics_table) {
+        smooth_x <- seq(1, 6, length.out = 301)
+        statistic_columns <- c(
+          "mean", "median", "minimum", "percentile_10",
+          "percentile_25", "percentile_75", "percentile_90",
+          "maximum", "original", "all_eligible_mean",
+          "neutral_baseline"
+        )
+        output <- data.frame(bin_position = smooth_x)
+        for (column in statistic_columns) {
+          values <- statistics_table[[column]]
+          if (all(is.finite(values))) {
+            output[[column]] <- stats::spline(
+              x = statistics_table$bin_number,
+              y = values,
+              xout = smooth_x,
+              method = "natural"
+            )$y
+          } else {
+            output[[column]] <- NA_real_
+          }
+          output[[column]] <- pmin(1, pmax(0, output[[column]]))
+        }
+        outer_lower <- pmin(output$minimum, output$maximum)
+        outer_upper <- pmax(output$minimum, output$maximum)
+        inner_lower <- pmax(
+          outer_lower,
+          pmin(output$percentile_10, output$percentile_90)
+        )
+        inner_upper <- pmin(
+          outer_upper,
+          pmax(output$percentile_10, output$percentile_90)
+        )
+        output$minimum <- outer_lower
+        output$maximum <- outer_upper
+        output$percentile_10 <- pmin(inner_lower, inner_upper)
+        output$percentile_90 <- pmax(inner_lower, inner_upper)
+        output
+      }
+
+      make_profile_curve_plot <- function(
+        statistics_table, panel_title, y_axis_title, panel_caption
+      ) {
+        smooth_table <- smooth_curve_statistics(statistics_table)
+        ggplot2::ggplot() +
+          ggplot2::geom_ribbon(
+            data = smooth_table,
+            ggplot2::aes(
+              x = bin_position, ymin = minimum, ymax = maximum,
+              fill = "Observed min–max"
+            ),
+            alpha = 0.16
+          ) +
+          ggplot2::geom_ribbon(
+            data = smooth_table,
+            ggplot2::aes(
+              x = bin_position,
+              ymin = percentile_10, ymax = percentile_90,
+              fill = "10th–90th percentile"
+            ),
+            alpha = 0.34
+          ) +
+          ggplot2::geom_line(
+            data = smooth_table,
+            ggplot2::aes(
+              x = bin_position, y = neutral_baseline,
+              color = "Neutral baseline", linetype = "Neutral baseline"
+            ),
+            linewidth = 0.8
+          ) +
+          ggplot2::geom_line(
+            data = smooth_table,
+            ggplot2::aes(
+              x = bin_position, y = all_eligible_mean,
+              color = "All eligible mean", linetype = "All eligible mean"
+            ),
+            linewidth = 0.9
+          ) +
+          ggplot2::geom_line(
+            data = smooth_table,
+            ggplot2::aes(
+              x = bin_position, y = mean,
+              color = "Top 200 mean", linetype = "Top 200 mean"
+            ),
+            linewidth = 1.35
+          ) +
+          ggplot2::geom_point(
+            data = statistics_table,
+            ggplot2::aes(x = bin_number, y = mean),
+            color = colors[["orange"]], size = 2.3
+          ) +
+          ggplot2::geom_line(
+            data = smooth_table[is.finite(smooth_table$original), , drop = FALSE],
+            ggplot2::aes(
+              x = bin_position, y = original,
+              color = "original", linetype = "original"
+            ),
+            linewidth = 1.25
+          ) +
+          ggplot2::geom_point(
+            data = statistics_table[is.finite(statistics_table$original), , drop = FALSE],
+            ggplot2::aes(x = bin_number, y = original),
+            color = "#B2182B", size = 2.3
+          ) +
+          ggplot2::scale_fill_manual(
+            values = c(
+              "Observed min–max" = "#F6C8A8",
+              "10th–90th percentile" = "#E69F00"
+            )
+          ) +
+          ggplot2::scale_color_manual(
+            values = c(
+              "Top 200 mean" = colors[["orange"]],
+              "original" = "#B2182B",
+              "All eligible mean" = colors[["blue"]],
+              "Neutral baseline" = colors[["muted"]]
+            )
+          ) +
+          ggplot2::scale_linetype_manual(
+            values = c(
+              "Top 200 mean" = "solid",
+              "original" = "longdash",
+              "All eligible mean" = "dotdash",
+              "Neutral baseline" = "dotted"
+            )
+          ) +
+          ggplot2::scale_x_continuous(
+            breaks = seq_len(6), labels = paste0("bin", 1:6),
+            limits = c(1, 6)
+          ) +
+          ggplot2::scale_y_continuous(
+            labels = scales::percent,
+            expand = ggplot2::expansion(mult = c(0.02, 0.10))
+          ) +
+          ggplot2::labs(
+            title = panel_title,
+            subtitle = panel_caption,
+            x = "FACS bin (bin1 = highest mCherry)",
+            y = y_axis_title, color = NULL, linetype = NULL, fill = NULL
+          ) +
+          theme_sortseq() +
+          ggplot2::theme(
+            legend.position = "bottom",
+            panel.grid.minor = ggplot2::element_blank()
+          )
+      }
+
+      p_top200_q_curve <- make_profile_curve_plot(
+        q_curve_statistics,
+        "A. Equal-bin normalized enrichment profile",
+        "q = f / sum(f)",
+        sprintf(
+          paste0(
+            "Bin-size correction is removed on this shape scale; ",
+            "bin2/mean(bin1,bin3): Top 200 median %.2f, all eligible %.2f; ",
+            "%d/%d Top 200 below 0.75"
+          ),
+          bin2_valley_median, all_eligible_bin2_median,
+          bin2_valley_count, nrow(candidate_profiles)
+        )
+      )
+      p_top200_p_curve <- make_profile_curve_plot(
+        p_curve_statistics,
+        "B. Bin-size-corrected probability profile",
+        "p = w*f / sum(w*f)",
+        paste0(
+          "This is the corrected cell-distribution scale used for High15; ",
+          "p1+p2 is the primary endpoint"
+        )
+      )
+      p_top200_curve_ranges <- patchwork::wrap_plots(
+        p_top200_q_curve, p_top200_p_curve,
+        ncol = 1, guides = "collect", heights = c(1, 1)
+      )
+      save_all_profile_png(
+        "34_top200_profile_mean_and_range_curves.png",
+        p_top200_curve_ranges, 13.5, 12.0
+      )
+      grDevices::pdf(
+        file.path(
+          all_profile_output_dir,
+          "34_top200_profile_mean_and_range_curves.pdf"
+        ),
+        width = 13.5, height = 12.0, onefile = TRUE,
+        family = "Helvetica", paper = "special"
+      )
+      print(p_top200_curve_ranges)
+      grDevices::dev.off()
+      all_profile_plots[["34"]] <- p_top200_curve_ranges
     }
   }
 

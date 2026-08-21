@@ -104,6 +104,11 @@ results/sortseq/figures/all_utr_profiles/30_normalized_enrichment_profile_cluste
 results/sortseq/figures/all_utr_profiles/31_normalized_enrichment_profile_cluster_variability.png
 results/sortseq/figures/all_utr_profiles/32_top200_normalized_enrichment_profile_heatmap.png
 results/sortseq/figures/all_utr_profiles/33_top200_normalized_enrichment_profiles_page_01.png
+results/sortseq/figures/all_utr_profiles/34_top200_profile_mean_and_range_curves.png
+results/sortseq/figures/all_utr_profiles/34_top200_profile_mean_and_range_curves.pdf
+results/sortseq/figures/all_utr_profiles/top200_profile_curve_statistics.csv
+results/sortseq/figures/all_utr_profiles/top200_bin2_valley_diagnostic.csv
+results/sortseq/figures/all_utr_profiles/bin2_valley_group_summary.csv
 results/sortseq/figures/all_utr_profiles/top200_normalized_enrichment_profile_pages.pdf
 results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 ```
@@ -161,6 +166,33 @@ bin5의 기본 크기가 30%이므로 상대 농축값은 `log2(0.20/0.30)=-0.58
 - 33번: 25개 후보씩 나눈 개별 profile PNG
 - `top200_normalized_enrichment_profile_pages.pdf`: 모든 page를 합친 PDF
 - 각 후보 panel의 빨간 점선은 `original`, 주황선은 후보입니다.
+
+### 34번: Top 200 평균과 범위 곡선
+
+한 그림의 두 패널로 같은 Top 200을 서로 다른 척도에서 보여줍니다.
+
+- 주황색 실선: Top 200 평균
+- 진한 음영: 10–90 percentile 범위
+- 옅은 음영: 관측된 min–max 범위
+- 빨간 점선과 점: `original`
+- 파란 일점쇄선: total read ≥200인 전체 eligible UTR 평균
+- 회색 점선: 각 척도의 중립 baseline
+
+위 패널은 `q=f/sum(f)`입니다. 이 값은 `q=(p/w)/sum(p/w)`이므로 **bin-size
+correction을 제거한 equal-bin 상대 농축 모양**입니다. 아래 패널은
+`p=w*f/sum(w*f)`로, High15 순위를 실제로 계산하는 bin-size-corrected probability입니다.
+
+`top200_profile_curve_statistics.csv`에는 두 척도의 bin별 평균·중앙값·10/25/75/90
+percentile·최솟값·최댓값·original 값과 전체 eligible UTR 평균이 저장됩니다.
+`top200_bin2_valley_diagnostic.csv`에는 각 후보의
+`q2 / mean(q1,q3)`가 저장됩니다. 0.75 미만은 bin2 저점을 탐색하기 위한 flag이며
+biological state를 확정하는 기준은 아닙니다.
+`bin2_valley_group_summary.csv`는 같은 비율의 Top 200, 전체 eligible UTR, `original`
+요약을 비교합니다. 전체 eligible에서도 낮으면 공통적인 bin2 기술 효과를 먼저
+의심하고, Top 200에서만 낮으면 High15 후보 선택 구조의 영향을 먼저 봅니다.
+
+곡선은 bin1–6의 여섯 실제 점 사이를 natural spline으로 연결한 시각적 보간입니다.
+따라서 bin 사이에 추가 fluorescence 측정값이 존재한다는 뜻으로 해석하지 않습니다.
 
 ## 군집 방법과 주의점
 

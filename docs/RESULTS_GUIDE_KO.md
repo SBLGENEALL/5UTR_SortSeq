@@ -174,6 +174,9 @@ bash run_pipeline.sh plot
 보여줍니다. 29–31번은 합계 1인 normalized-enrichment q profile을 보여주며,
 32번과 page PDF는 High15 Top 200 후보를 표시합니다. `original`은 Top 200 밖이어도
 추가되고 빨간색으로 표시됩니다.
+34번은 Top 200의 평균 곡선, 10–90 percentile, min–max 범위와 `original`을
+보여줍니다. 위 패널 q는 bin-size correction을 제거한 상대 농축 모양이고, 아래 패널
+p는 High15에 사용하는 bin-size-corrected probability입니다.
 Cluster 번호는 분포를 요약하기 위한 탐색적 라벨이며 cloning 후보 순위가 아닙니다.
 후보 선정은 `high15_final_rank`를 유지하고 cluster는 분포 형태와 outlier를 검토하는
 보조 QC로 사용합니다. 파일별 상세 설명은

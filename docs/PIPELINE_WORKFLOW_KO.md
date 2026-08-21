@@ -498,6 +498,7 @@ results/sortseq/figures/all_utr_profiles/29_all_utr_normalized_enrichment_profil
 results/sortseq/figures/all_utr_profiles/30_normalized_enrichment_profile_cluster_means.png
 results/sortseq/figures/all_utr_profiles/31_normalized_enrichment_profile_cluster_variability.png
 results/sortseq/figures/all_utr_profiles/32_top200_normalized_enrichment_profile_heatmap.png
+results/sortseq/figures/all_utr_profiles/34_top200_profile_mean_and_range_curves.png
 results/sortseq/figures/all_utr_profiles/top200_normalized_enrichment_profile_pages.pdf
 results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
 ```
@@ -511,7 +512,8 @@ Python 환경에서 먼저 `bash run_pipeline.sh profile-qc`를 실행해야 합
 bin probability, 26번은 bin 기본 크기 대비 상대 농축, 27번은 유사 분포 cluster의
 평균 구성, 28번은 cluster 내부의 개별 UTR 변이입니다. 29–31번은
 `q=f/sum(f)` normalized-enrichment profile이고, 32번과 별도 PDF는 High15 Top 200과
-`original`을 보여줍니다. 모든 약 2,001개 UTR의 실제 q 값은
+`original`을 보여줍니다. 34번은 같은 Top 200의 평균·10–90 percentile·min–max와
+`original`을 q 및 bin-size-corrected p 두 패널로 비교합니다. 모든 약 2,001개 UTR의 실제 q 값은
 `all_utr_normalized_enrichment_profiles.csv`에 저장됩니다. 상세 해석은
 [전체 UTR 6-bin 분포 시각화](ALL_UTR_PROFILE_QC_KO.md)를 보세요.
 

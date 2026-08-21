@@ -130,6 +130,9 @@ results/sortseq/all_utr_profiles/all_utr_profile_assignments.csv
 results/sortseq/all_utr_profiles/all_utr_profile_cluster_summary.csv
 results/sortseq/all_utr_profiles/all_utr_normalized_enrichment_profiles.csv
 results/sortseq/all_utr_profiles/top200_normalized_enrichment_profiles.csv
+results/sortseq/figures/all_utr_profiles/top200_profile_curve_statistics.csv
+results/sortseq/figures/all_utr_profiles/top200_bin2_valley_diagnostic.csv
+results/sortseq/figures/all_utr_profiles/bin2_valley_group_summary.csv
 results/sortseq/bimodality_qc/bimodality_summary.csv
 results/sortseq/bimodality_qc/clear_bimodal_candidates.csv
 results/sortseq/bimodality_qc/utra_like_strong_polarization.csv
@@ -141,6 +144,8 @@ results/sortseq/figures/sortseq_qc_figures.pdf
 results/sortseq/figures/strict/strict_candidate_figures.pdf
 results/sortseq/figures/top15/top15_candidate_figures.pdf
 results/sortseq/figures/all_utr_profiles/all_utr_profile_figures.pdf
+results/sortseq/figures/all_utr_profiles/34_top200_profile_mean_and_range_curves.png
+results/sortseq/figures/all_utr_profiles/34_top200_profile_mean_and_range_curves.pdf
 ```
 
 `original` 또는 `orginal` control UTR는 자동 탐지됩니다. Reference 대비 High15와
@@ -223,6 +228,13 @@ profile page로 표시합니다. 정확한 cluster와 전체 UTR 값은
 `all_utr_profile_assignments.csv` 및 `all_utr_normalized_enrichment_profiles.csv`에서
 확인합니다. 자세한 설명은
 [전체 UTR 6-bin 분포 시각화](docs/ALL_UTR_PROFILE_QC_KO.md)를 보세요.
+
+34번 그림은 Top 200의 평균, 10–90 percentile, min–max 범위와 `original`을
+부드러운 곡선으로 표시합니다. 위 패널의 `q=f/sum(f)`는 bin-size correction이
+제거된 상대 농축 모양이고, 아래 패널의 `p=w*f/sum(w*f)`는 High15 계산에 사용하는
+bin-size-corrected probability입니다. 전체 eligible UTR 평균도 함께 표시하여 bin2
+저점이 library 전체 현상인지 Top 200 선택군의 현상인지 구분합니다. 곡선은 여섯 개 bin 점 사이의 시각적
+보간이며 추가 측정값을 의미하지 않습니다.
 
 ## 계산 전체를 Step 1–8 CSV로 확인
 
